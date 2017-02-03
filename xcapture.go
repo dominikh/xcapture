@@ -15,55 +15,50 @@ import (
 
 func main() {
 	fps := flag.Uint("fps", 60, "FPS")
+	win := flag.Uint("win", 0, "Window ID")
 	flag.Parse()
 
 	log.Printf("Rendering at %d FPS", *fps)
 
-	// XCompositeRedirectWindow update -> true
 	xu, err := xgbutil.NewConn()
 	if err != nil {
-		// XXX proper error handling
-		panic(err)
+		log.Fatal("Couldn't connect to X server:", err)
 	}
 	if err := composite.Init(xu.Conn()); err != nil {
-		// XXX proper error handling
-		panic(err)
+		log.Fatal("COMPOSITE extension is not available:", err)
 	}
 	if err := xshm.Init(xu.Conn()); err != nil {
-		panic(err)
+		// TODO(dh) implement a slower version that is not using SHM
+		log.Fatal("MIT-SHM extension is not available:", err)
 	}
-	win := xproto.Window(23068730)
-	if err := composite.RedirectWindowChecked(xu.Conn(), win, composite.RedirectAutomatic).Check(); err != nil {
-		// XXX proper error handling
-
-		// TODO handle BadAccess, triggered if another client is
-		// already redirecting the window
-		panic(err)
+	if err := composite.RedirectWindowChecked(xu.Conn(), xproto.Window(*win), composite.RedirectAutomatic).Check(); err != nil {
+		if err, ok := err.(xproto.AccessError); ok {
+			log.Fatal("Can't capture window, another program seems to be capturing it already:", err)
+		}
+		log.Fatal("Can't capture window:", err)
 	}
-	// XCompositeNameWindowPixmap
 	pix, err := xproto.NewPixmapId(xu.Conn())
 	if err != nil {
-		// XXX
-		panic(err)
+		log.Fatal("Could not obtain ID for pixmap:", err)
 	}
-	composite.NameWindowPixmap(xu.Conn(), win, pix)
+	composite.NameWindowPixmap(xu.Conn(), xproto.Window(*win), pix)
 
 	// TODO free pixmap if window goes away or is resized, get new pixmap
 
 	segID, err := xshm.NewSegId(xu.Conn())
 	if err != nil {
-		panic(err)
+		log.Fatal("Could not obtain ID for SHM:", err)
 	}
 	seg, err := shm.Create(1920 * 1080 * 4)
 	if err != nil {
-		panic(err)
+		log.Fatal("Could not create shared memory:", err)
 	}
 	if err := xshm.AttachChecked(xu.Conn(), segID, uint32(seg.Id), false).Check(); err != nil {
-		panic(err)
+		log.Fatal("Could not attach shared memory to X server:", err)
 	}
 	data, err := seg.Attach()
 	if err != nil {
-		panic(err)
+		log.Fatal("Could not attach shared memory:", err)
 	}
 	bufs := [][]byte{make([]byte, 1920*1080*4), make([]byte, 1920*1080*4)}
 	i := 0
@@ -87,7 +82,7 @@ func main() {
 		// TODO get window's actual dimensions
 		_, err := xshm.GetImage(xu.Conn(), xproto.Drawable(pix), 0, 0, 1920, 1080, 0xFFFFFFFF, xproto.ImageFormatZPixmap, segID, 0).Reply()
 		if err != nil {
-			panic(err)
+			log.Fatal("Could not fetch window contents:", err)
 		}
 		copy(bufs[i], ((*[10920 * 1080 * 4]byte)(data)[:]))
 		ch <- bufs[i]
