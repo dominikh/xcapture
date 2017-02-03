@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"time"
 
@@ -58,8 +59,16 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	t := time.NewTicker(time.Second / 60)
+	interval := time.Second / 60
+	t := time.NewTicker(interval)
+	last := time.Now()
 	for range t.C {
+		now := time.Now()
+		d := now.Sub(last)
+		if d-interval > interval/20 {
+			fmt.Fprintf(os.Stderr, "%s late\n", d-interval)
+		}
+		last = now
 		// TODO get window's actual dimensions
 		r, err := xshm.GetImage(xu.Conn(), xproto.Drawable(pix), 0, 0, 1920, 1080, 0xFFFFFFFF, xproto.ImageFormatZPixmap, segID, 0).Reply()
 		_ = r
