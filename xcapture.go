@@ -1,7 +1,8 @@
 package main
 
 import (
-	"fmt"
+	"flag"
+	"log"
 	"os"
 	"time"
 
@@ -13,6 +14,11 @@ import (
 )
 
 func main() {
+	fps := flag.Uint("fps", 60, "FPS")
+	flag.Parse()
+
+	log.Printf("Rendering at %d FPS", *fps)
+
 	// XCompositeRedirectWindow update -> true
 	xu, err := xgbutil.NewConn()
 	if err != nil {
@@ -59,25 +65,32 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	interval := time.Second / 60
-	t := time.NewTicker(interval)
-	last := time.Now()
-	for range t.C {
-		now := time.Now()
-		d := now.Sub(last)
-		if d-interval > interval/20 {
-			fmt.Fprintf(os.Stderr, "%s late\n", d-interval)
+	bufs := [][]byte{make([]byte, 1920*1080*4), make([]byte, 1920*1080*4)}
+	i := 0
+	ch := make(chan []byte)
+
+	empty := make([]byte, 1920*1080*4)
+	go func() {
+		t := time.NewTicker(time.Second / time.Duration(*fps))
+		for range t.C {
+			select {
+			case b := <-ch:
+				os.Stdout.Write(b)
+			default:
+				log.Println("dropped frame")
+				os.Stdout.Write(empty)
+			}
 		}
-		last = now
+	}()
+
+	for {
 		// TODO get window's actual dimensions
-		r, err := xshm.GetImage(xu.Conn(), xproto.Drawable(pix), 0, 0, 1920, 1080, 0xFFFFFFFF, xproto.ImageFormatZPixmap, segID, 0).Reply()
-		_ = r
-		//r, err := xproto.GetImage(xu.Conn(), xproto.ImageFormatZPixmap, xproto.Drawable(pix), 0, 0, 1920, 1080, 0xFFFFFFFF).Reply()
+		_, err := xshm.GetImage(xu.Conn(), xproto.Drawable(pix), 0, 0, 1920, 1080, 0xFFFFFFFF, xproto.ImageFormatZPixmap, segID, 0).Reply()
 		if err != nil {
-			// XXX
 			panic(err)
 		}
-		os.Stdout.Write((*[10920 * 1080 * 4]byte)(data)[:])
-		// os.Stdout.Write(r.Data)
+		copy(bufs[i], ((*[10920 * 1080 * 4]byte)(data)[:]))
+		ch <- bufs[i]
+		i = (i + 1) % 2
 	}
 }
