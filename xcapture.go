@@ -2,10 +2,13 @@ package main
 
 import (
 	"os"
+	"time"
 
 	"github.com/BurntSushi/xgb/composite"
+	xshm "github.com/BurntSushi/xgb/shm"
 	"github.com/BurntSushi/xgb/xproto"
 	"github.com/BurntSushi/xgbutil"
+	"github.com/ghetzel/shmtool/shm" // TODO switch to pure Go implementation
 )
 
 func main() {
@@ -17,6 +20,9 @@ func main() {
 	}
 	if err := composite.Init(xu.Conn()); err != nil {
 		// XXX proper error handling
+		panic(err)
+	}
+	if err := xshm.Init(xu.Conn()); err != nil {
 		panic(err)
 	}
 	win := xproto.Window(23068730)
@@ -37,13 +43,32 @@ func main() {
 
 	// TODO free pixmap if window goes away or is resized, get new pixmap
 
-	for {
+	segID, err := xshm.NewSegId(xu.Conn())
+	if err != nil {
+		panic(err)
+	}
+	seg, err := shm.Create(1920 * 1080 * 4)
+	if err != nil {
+		panic(err)
+	}
+	if err := xshm.AttachChecked(xu.Conn(), segID, uint32(seg.Id), false).Check(); err != nil {
+		panic(err)
+	}
+	data, err := seg.Attach()
+	if err != nil {
+		panic(err)
+	}
+	t := time.NewTicker(time.Second / 60)
+	for range t.C {
 		// TODO get window's actual dimensions
-		r, err := xproto.GetImage(xu.Conn(), xproto.ImageFormatZPixmap, xproto.Drawable(pix), 0, 0, 1920, 1080, 0xFFFFFFFF).Reply()
+		r, err := xshm.GetImage(xu.Conn(), xproto.Drawable(pix), 0, 0, 1920, 1080, 0xFFFFFFFF, xproto.ImageFormatZPixmap, segID, 0).Reply()
+		_ = r
+		//r, err := xproto.GetImage(xu.Conn(), xproto.ImageFormatZPixmap, xproto.Drawable(pix), 0, 0, 1920, 1080, 0xFFFFFFFF).Reply()
 		if err != nil {
 			// XXX
 			panic(err)
 		}
-		os.Stdout.Write(r.Data)
+		os.Stdout.Write((*[10920 * 1080 * 4]byte)(data)[:])
+		// os.Stdout.Write(r.Data)
 	}
 }
