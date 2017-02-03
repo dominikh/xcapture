@@ -49,7 +49,11 @@ func main() {
 	if err != nil {
 		log.Fatal("Could not obtain ID for SHM:", err)
 	}
-	seg, err := shm.Create(1920 * 1080 * 4)
+
+	const width = 1920
+	const height = 1080
+	const frameSize = width * height * 4
+	seg, err := shm.Create(frameSize * 2)
 	if err != nil {
 		log.Fatal("Could not create shared memory:", err)
 	}
@@ -60,32 +64,36 @@ func main() {
 	if err != nil {
 		log.Fatal("Could not attach shared memory:", err)
 	}
-	bufs := [][]byte{make([]byte, 1920*1080*4), make([]byte, 1920*1080*4)}
 	i := 0
 	ch := make(chan []byte)
 
-	empty := make([]byte, 1920*1080*4)
+	empty := make([]byte, frameSize)
 	go func() {
 		t := time.NewTicker(time.Second / time.Duration(*fps))
 		for range t.C {
 			select {
 			case b := <-ch:
-				os.Stdout.Write(b)
+				if _, err := os.Stdout.Write(b); err != nil {
+					log.Fatal("error writing frame:", err)
+				}
 			default:
 				log.Println("dropped frame")
-				os.Stdout.Write(empty)
+				if _, err := os.Stdout.Write(empty); err != nil {
+					log.Fatal("error writing frame:", err)
+				}
 			}
 		}
 	}()
 
 	for {
 		// TODO get window's actual dimensions
-		_, err := xshm.GetImage(xu.Conn(), xproto.Drawable(pix), 0, 0, 1920, 1080, 0xFFFFFFFF, xproto.ImageFormatZPixmap, segID, 0).Reply()
+		offset := i * frameSize
+		_, err := xshm.GetImage(xu.Conn(), xproto.Drawable(pix), 0, 0, width, height, 0xFFFFFFFF, xproto.ImageFormatZPixmap, segID, uint32(offset)).Reply()
 		if err != nil {
 			log.Fatal("Could not fetch window contents:", err)
 		}
-		copy(bufs[i], ((*[10920 * 1080 * 4]byte)(data)[:]))
-		ch <- bufs[i]
+		b := ((*[frameSize * 2]byte)(data)[offset : offset+frameSize])
+		ch <- b
 		i = (i + 1) % 2
 	}
 }
