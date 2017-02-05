@@ -6,6 +6,8 @@ import (
 	"os"
 	"time"
 
+	"honnef.co/go/xcapture/avi"
+
 	"github.com/BurntSushi/xgb/composite"
 	xshm "github.com/BurntSushi/xgb/shm"
 	"github.com/BurntSushi/xgb/xproto"
@@ -67,18 +69,29 @@ func main() {
 	i := 0
 	ch := make(chan []byte)
 
+	desc := avi.Description{
+		Width:     1920,
+		Height:    1080,
+		RateNum:   int(*fps),
+		RateDenom: 1,
+	}
+	stream, err := avi.NewStream(os.Stdout, desc)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	empty := make([]byte, frameSize)
 	go func() {
 		t := time.NewTicker(time.Second / time.Duration(*fps))
 		for range t.C {
 			select {
 			case b := <-ch:
-				if _, err := os.Stdout.Write(b); err != nil {
+				if err := stream.SendFrame(b); err != nil {
 					log.Fatal("error writing frame:", err)
 				}
 			default:
 				log.Println("dropped frame")
-				if _, err := os.Stdout.Write(empty); err != nil {
+				if err := stream.SendFrame(empty); err != nil {
 					log.Fatal("error writing frame:", err)
 				}
 			}
