@@ -22,6 +22,30 @@ import (
 	"github.com/ghetzel/shmtool/shm" // TODO switch to pure Go implementation
 )
 
+const bytesPerPixel = 4
+
+type Buffer struct {
+	Width  int
+	Height int
+	Pages  int
+	Data   []byte
+	ShmID  int
+}
+
+func (b Buffer) PageOffset(idx int) int {
+	return b.PageSize() * idx
+}
+
+func (b Buffer) PageSize() int {
+	return b.Width * b.Height * bytesPerPixel
+}
+
+func (b Buffer) Page(idx int) []byte {
+	offset := b.PageOffset(idx)
+	size := b.PageSize()
+	return b.Data[offset : offset+size : offset+size]
+}
+
 type BitmapInfoHeader struct {
 	Size          uint32
 	Width         int32
@@ -34,6 +58,31 @@ type BitmapInfoHeader struct {
 	YPelsPerMeter int32
 	ClrUsed       uint32
 	ClrImportant  uint32
+}
+
+func NewBuffer(width, height, pages int) (Buffer, error) {
+	size := width * height * pages * bytesPerPixel
+	seg, err := shm.Create(size)
+	if err != nil {
+		return Buffer{}, err
+	}
+	data, err := seg.Attach()
+	if err != nil {
+		return Buffer{}, err
+	}
+	sh := &reflect.SliceHeader{
+		Data: uintptr(data),
+		Len:  size,
+		Cap:  size,
+	}
+	b := (*(*[]byte)(unsafe.Pointer(sh)))
+	return Buffer{
+		Width:  width,
+		Height: height,
+		Pages:  pages,
+		Data:   b,
+		ShmID:  seg.Id,
+	}, nil
 }
 
 func main() {
@@ -77,19 +126,15 @@ func main() {
 	}
 	width := geom.Width
 	height := geom.Height
-	frameSize := int(width) * int(height) * 4
 
-	seg, err := shm.Create(frameSize * 2)
+	buf, err := NewBuffer(int(width), int(height), 2)
 	if err != nil {
 		log.Fatal("Could not create shared memory:", err)
 	}
-	if err := xshm.AttachChecked(xu.Conn(), segID, uint32(seg.Id), false).Check(); err != nil {
+	if err := xshm.AttachChecked(xu.Conn(), segID, uint32(buf.ShmID), false).Check(); err != nil {
 		log.Fatal("Could not attach shared memory to X server:", err)
 	}
-	data, err := seg.Attach()
-	if err != nil {
-		log.Fatal("Could not attach shared memory:", err)
-	}
+
 	i := 0
 	ch := make(chan []byte)
 
@@ -193,19 +238,12 @@ func main() {
 	}()
 
 	for {
-		// TODO get window's actual dimensions
-		offset := i * frameSize
+		offset := buf.PageOffset(i)
 		_, err := xshm.GetImage(xu.Conn(), xproto.Drawable(pix), 0, 0, width, height, 0xFFFFFFFF, xproto.ImageFormatZPixmap, segID, uint32(offset)).Reply()
 		if err != nil {
 			log.Fatal("Could not fetch window contents:", err)
 		}
-		sh := reflect.SliceHeader{
-			Data: uintptr(data),
-			Len:  frameSize * 2,
-			Cap:  frameSize * 2,
-		}
-		b := (*(*[]byte)(unsafe.Pointer(&sh)))[offset : offset+frameSize]
-		ch <- b
+		ch <- buf.Page(i)
 		i = (i + 1) % 2
 	}
 }
