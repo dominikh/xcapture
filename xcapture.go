@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
+	"encoding/binary"
 	"flag"
 	"log"
 	"os"
 	"time"
 
-	"honnef.co/go/xcapture/avi"
+	"honnef.co/go/matroska"
+	"honnef.co/go/matroska/ebml"
 
 	"github.com/BurntSushi/xgb/composite"
 	xshm "github.com/BurntSushi/xgb/shm"
@@ -14,6 +17,20 @@ import (
 	"github.com/BurntSushi/xgbutil"
 	"github.com/ghetzel/shmtool/shm" // TODO switch to pure Go implementation
 )
+
+type BitmapInfoHeader struct {
+	Size          uint32
+	Width         int32
+	Height        int32
+	Planes        uint16
+	BitCount      uint16
+	Compression   [4]byte
+	SizeImage     uint32
+	XPelsPerMeter int32
+	YPelsPerMeter int32
+	ClrUsed       uint32
+	ClrImportant  uint32
+}
 
 func main() {
 	fps := flag.Uint("fps", 60, "FPS")
@@ -69,31 +86,82 @@ func main() {
 	i := 0
 	ch := make(chan []byte)
 
-	desc := avi.Description{
-		Width:     1920,
-		Height:    1080,
-		RateNum:   int(*fps),
-		RateDenom: 1,
+	bmp := BitmapInfoHeader{
+		Width:    int32(1920),
+		Height:   int32(-1080),
+		Planes:   1,
+		BitCount: 32,
 	}
-	stream, err := avi.NewStream(os.Stdout, desc)
-	if err != nil {
-		log.Fatal(err)
+	codec := &bytes.Buffer{}
+	if err := binary.Write(codec, binary.LittleEndian, bmp); err != nil {
+		panic(err)
 	}
 
-	empty := make([]byte, frameSize)
+	e := ebml.NewEncoder(os.Stdout)
+	e.Emit(
+		ebml.EBML(
+			ebml.DocType(ebml.String("matroska")),
+			ebml.DocTypeVersion(ebml.Uint(4)),
+			ebml.DocTypeReadVersion(ebml.Uint(1))))
+
+	e.EmitHeader(matroska.Segment, -1)
+	e.Emit(
+		matroska.Info(
+			matroska.TimecodeScale(ebml.Uint(1)),
+			matroska.MuxingApp(ebml.UTF8("honnef.co/go/mkv")),
+			matroska.WritingApp(ebml.UTF8("xcapture"))))
+
+	e.Emit(
+		matroska.Tracks(
+			matroska.TrackEntry(
+				matroska.TrackNumber(ebml.Uint(1)),
+				matroska.TrackUID(ebml.Uint(0xDEADBEEF)),
+				matroska.TrackType(ebml.Uint(1)),
+				matroska.FlagLacing(ebml.Uint(0)),
+				matroska.DefaultDuration(ebml.Uint(time.Second/60)),
+				matroska.CodecID(ebml.String("V_MS/VFW/FOURCC")),
+				matroska.CodecPrivate(ebml.Binary(codec.Bytes())),
+				matroska.Video(
+					matroska.PixelWidth(ebml.Uint(width)),
+					matroska.PixelHeight(ebml.Uint(height)),
+					matroska.ColourSpace(ebml.Binary("BGRA")),
+					matroska.Colour(
+						matroska.BitsPerChannel(ebml.Uint(8)))))))
+
+	idx := -1
+	var prevFrame []byte
+	sendFrame := func(b []byte) {
+		idx++
+		if b == nil {
+			b = prevFrame
+		}
+		prevFrame = b
+		block := []byte{
+			129,
+			0, 0,
+			128,
+		}
+		block = append(block, b...)
+		e.Emit(
+			matroska.Cluster(
+				matroska.Timecode(ebml.Uint(idx*int(time.Second/60))),
+				matroska.Position(ebml.Uint(0)),
+				matroska.SimpleBlock(ebml.Binary(block))))
+
+		if e.Err != nil {
+			log.Fatal(err)
+		}
+	}
+
 	go func() {
 		t := time.NewTicker(time.Second / time.Duration(*fps))
 		for range t.C {
 			select {
 			case b := <-ch:
-				if err := stream.SendFrame(b); err != nil {
-					log.Fatal("error writing frame:", err)
-				}
+				sendFrame(b)
 			default:
 				log.Println("dropped frame")
-				if err := stream.SendFrame(empty); err != nil {
-					log.Fatal("error writing frame:", err)
-				}
+				sendFrame(nil)
 			}
 		}
 	}()
