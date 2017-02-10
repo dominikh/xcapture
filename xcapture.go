@@ -113,8 +113,6 @@ func main() {
 	}
 	composite.NameWindowPixmap(xu.Conn(), xproto.Window(*win), pix)
 
-	// TODO free pixmap if window goes away or is resized, get new pixmap
-
 	segID, err := xshm.NewSegId(xu.Conn())
 	if err != nil {
 		log.Fatal("Could not obtain ID for SHM:", err)
@@ -181,10 +179,10 @@ func main() {
 						matroska.BitsPerChannel(ebml.Uint(8)))))))
 
 	go xevent.Main(xu)
+
+	configureEvents := make(chan xevent.ConfigureNotifyEvent, 1e4)
 	configCb := func(xu *xgbutil.XUtil, ev xevent.ConfigureNotifyEvent) {
-		if ev.Width != width || ev.Height != height {
-			log.Println("new window size")
-		}
+		configureEvents <- ev
 	}
 	xevent.ConfigureNotifyFun(configCb).Connect(xu, xproto.Window(*win))
 	err = xproto.ChangeWindowAttributesChecked(xu.Conn(), xproto.Window(*win),
@@ -225,7 +223,8 @@ func main() {
 		dropped := 0
 		for ts := range t.C {
 			fps := float64(time.Second) / float64(ts.Sub(pts))
-			fmt.Fprintf(os.Stderr, "\rFrame time: %14s (%4.2f FPS); %5d dropped; %4dx%4d -> %4dx%4d          ", ts.Sub(pts), fps, dropped, width, height, width, height)
+			// XXX we are racing on width and height
+			fmt.Fprintf(os.Stderr, "\rFrame time: %14s (%4.2f FPS); %5d dropped; %4dx%4d -> %4dx%4d          ", ts.Sub(pts), fps, dropped, width, height, buf.Width, buf.Height)
 			pts = ts
 			select {
 			case b := <-ch:
@@ -237,13 +236,53 @@ func main() {
 		}
 	}()
 
+	scratch := make([]byte, buf.PageSize())
 	for {
-		offset := buf.PageOffset(i)
-		_, err := xshm.GetImage(xu.Conn(), xproto.Drawable(pix), 0, 0, width, height, 0xFFFFFFFF, xproto.ImageFormatZPixmap, segID, uint32(offset)).Reply()
-		if err != nil {
-			log.Fatal("Could not fetch window contents:", err)
+		select {
+		case ev := <-configureEvents:
+			if ev.Width != width || ev.Height != height {
+				width = ev.Width
+				height = ev.Height
+
+			}
+			// DRY
+			xproto.FreePixmap(xu.Conn(), pix)
+			var err error
+			pix, err = xproto.NewPixmapId(xu.Conn())
+			if err != nil {
+				log.Fatal("Could not obtain ID for pixmap:", err)
+			}
+			composite.NameWindowPixmap(xu.Conn(), xproto.Window(*win), pix)
+		default:
+			offset := buf.PageOffset(i)
+			w := width
+			if int(w) > buf.Width {
+				w = uint16(buf.Width)
+			}
+			h := height
+			if int(h) > buf.Height {
+				h = uint16(buf.Height)
+			}
+			_, err := xshm.GetImage(xu.Conn(), xproto.Drawable(pix), 0, 0, w, h, 0xFFFFFFFF, xproto.ImageFormatZPixmap, segID, uint32(offset)).Reply()
+			if err != nil {
+				log.Println("Could not fetch window contents:", err)
+				continue
+			}
+			page := buf.Page(i)
+			copy(scratch, page)
+
+			if int(w) < buf.Width || int(h) < buf.Height {
+				copy(scratch, page)
+				for i := range page {
+					page[i] = 0
+				}
+				for i := 0; i < int(h); i++ {
+					copy(page[i*buf.Width*bytesPerPixel:], scratch[i*int(w)*bytesPerPixel:(i+1)*int(w)*bytesPerPixel])
+				}
+			}
+
+			ch <- page
+			i = (i + 1) % 2
 		}
-		ch <- buf.Page(i)
-		i = (i + 1) % 2
 	}
 }
