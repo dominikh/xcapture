@@ -275,7 +275,6 @@ func main() {
 			}
 
 			page := buf.Page(i)
-			copy(scratch, page)
 
 			// TODO(dh): instead of copying into scratch and back, we
 			// should have a third page that we can copy into and send
