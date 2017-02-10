@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"reflect"
 	"time"
+	"unsafe"
 
 	"honnef.co/go/matroska"
 	"honnef.co/go/matroska/ebml"
@@ -37,8 +39,6 @@ func main() {
 	fps := flag.Uint("fps", 60, "FPS")
 	win := flag.Uint("win", 0, "Window ID")
 	flag.Parse()
-
-	log.Printf("Rendering at %d FPS", *fps)
 
 	xu, err := xgbutil.NewConn()
 	if err != nil {
@@ -70,9 +70,14 @@ func main() {
 		log.Fatal("Could not obtain ID for SHM:", err)
 	}
 
-	const width = 1920
-	const height = 1080
-	const frameSize = width * height * 4
+	geom, err := xproto.GetGeometry(xu.Conn(), xproto.Drawable(*win)).Reply()
+	if err != nil {
+		log.Fatal("Could not determine window dimensions:", err)
+	}
+	width := geom.Width
+	height := geom.Height
+	frameSize := int(width) * int(height) * 4
+
 	seg, err := shm.Create(frameSize * 2)
 	if err != nil {
 		log.Fatal("Could not create shared memory:", err)
@@ -88,8 +93,8 @@ func main() {
 	ch := make(chan []byte)
 
 	bmp := BitmapInfoHeader{
-		Width:    int32(1920),
-		Height:   int32(-1080),
+		Width:    int32(width),
+		Height:   int32(-height),
 		Planes:   1,
 		BitCount: 32,
 	}
@@ -180,7 +185,12 @@ func main() {
 		if err != nil {
 			log.Fatal("Could not fetch window contents:", err)
 		}
-		b := ((*[frameSize * 2]byte)(data)[offset : offset+frameSize])
+		sh := reflect.SliceHeader{
+			Data: uintptr(data),
+			Len:  frameSize * 2,
+			Cap:  frameSize * 2,
+		}
+		b := (*(*[]byte)(unsafe.Pointer(&sh)))[offset : offset+frameSize]
 		ch <- b
 		i = (i + 1) % 2
 	}
