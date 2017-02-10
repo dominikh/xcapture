@@ -228,6 +228,7 @@ func main() {
 	}()
 
 	for {
+		var cfgev *xproto.ConfigureNotifyEvent
 		for {
 			ev, err := xu.Conn().PollForEvent()
 			if err != nil {
@@ -237,19 +238,22 @@ func main() {
 				break
 			}
 			if ev, ok := ev.(xproto.ConfigureNotifyEvent); ok {
-				if ev.Width != width || ev.Height != height {
-					width = ev.Width
-					height = ev.Height
+				cfgev = &ev
+			}
+		}
+		if cfgev != nil {
+			if cfgev.Width != width || cfgev.Height != height {
+				width = cfgev.Width
+				height = cfgev.Height
 
-					// DRY
-					xproto.FreePixmap(xu.Conn(), pix)
-					var err error
-					pix, err = xproto.NewPixmapId(xu.Conn())
-					if err != nil {
-						log.Fatal("Could not obtain ID for pixmap:", err)
-					}
-					composite.NameWindowPixmap(xu.Conn(), xproto.Window(*win), pix)
+				// DRY
+				xproto.FreePixmap(xu.Conn(), pix)
+				var err error
+				pix, err = xproto.NewPixmapId(xu.Conn())
+				if err != nil {
+					log.Fatal("Could not obtain ID for pixmap:", err)
 				}
+				composite.NameWindowPixmap(xu.Conn(), xproto.Window(*win), pix)
 			}
 		}
 		offset := buf.PageOffset(i)
