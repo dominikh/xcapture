@@ -18,6 +18,7 @@ import (
 	xshm "github.com/BurntSushi/xgb/shm"
 	"github.com/BurntSushi/xgb/xproto"
 	"github.com/BurntSushi/xgbutil"
+	"github.com/BurntSushi/xgbutil/xevent"
 	"github.com/ghetzel/shmtool/shm" // TODO switch to pure Go implementation
 )
 
@@ -133,6 +134,19 @@ func main() {
 					matroska.ColourSpace(ebml.Binary("BGRA")),
 					matroska.Colour(
 						matroska.BitsPerChannel(ebml.Uint(8)))))))
+
+	go xevent.Main(xu)
+	configCb := func(xu *xgbutil.XUtil, ev xevent.ConfigureNotifyEvent) {
+		if ev.Width != width || ev.Height != height {
+			log.Println("new window size")
+		}
+	}
+	xevent.ConfigureNotifyFun(configCb).Connect(xu, xproto.Window(*win))
+	err = xproto.ChangeWindowAttributesChecked(xu.Conn(), xproto.Window(*win),
+		xproto.CwEventMask, []uint32{uint32(xproto.EventMaskStructureNotify)}).Check()
+	if err != nil {
+		log.Fatal("Couldn't monitor window for size changes:", err)
+	}
 
 	idx := -1
 	var prevFrame []byte
