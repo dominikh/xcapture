@@ -13,13 +13,13 @@ import (
 
 	"honnef.co/go/matroska"
 	"honnef.co/go/matroska/ebml"
+	"honnef.co/go/xcapture/internal/shm"
 
 	"github.com/BurntSushi/xgb/composite"
 	xshm "github.com/BurntSushi/xgb/shm"
 	"github.com/BurntSushi/xgb/xproto"
 	"github.com/BurntSushi/xgbutil"
 	"github.com/BurntSushi/xgbutil/xevent"
-	"github.com/ghetzel/shmtool/shm" // TODO switch to pure Go implementation
 )
 
 const bytesPerPixel = 4
@@ -81,7 +81,7 @@ func NewBuffer(width, height, pages int) (Buffer, error) {
 		Height: height,
 		Pages:  pages,
 		Data:   b,
-		ShmID:  seg.Id,
+		ShmID:  seg.ID,
 	}, nil
 }
 
@@ -271,6 +271,9 @@ func main() {
 			page := buf.Page(i)
 			copy(scratch, page)
 
+			// TODO(dh): instead of copying into scratch and back, we
+			// should have a third page that we can copy into and send
+			// directly onto the channel
 			if int(w) < buf.Width || int(h) < buf.Height {
 				copy(scratch, page)
 				for i := range page {
