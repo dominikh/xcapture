@@ -170,7 +170,7 @@ func main() {
 				matroska.TrackUID(ebml.Uint(0xDEADBEEF)),
 				matroska.TrackType(ebml.Uint(1)),
 				matroska.FlagLacing(ebml.Uint(0)),
-				matroska.DefaultDuration(ebml.Uint(time.Second/60)),
+				matroska.DefaultDuration(ebml.Uint(time.Second/time.Duration(*fps))),
 				matroska.CodecID(ebml.String("V_MS/VFW/FOURCC")),
 				matroska.CodecPrivate(ebml.Binary(codec.Bytes())),
 				matroska.Video(
@@ -209,7 +209,7 @@ func main() {
 		block = append(block, b...)
 		e.Emit(
 			matroska.Cluster(
-				matroska.Timecode(ebml.Uint(idx*int(time.Second/60))),
+				matroska.Timecode(ebml.Uint(idx*int(time.Second/time.Duration(*fps)))),
 				matroska.Position(ebml.Uint(0)),
 				matroska.SimpleBlock(ebml.Binary(block))))
 
