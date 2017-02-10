@@ -198,19 +198,12 @@ func main() {
 	}
 
 	idx := -1
-	var prevFrame []byte
+	block := make([]byte, buf.PageSize()+4)
+	block[0] = 129
+	block[3] = 128
 	sendFrame := func(b []byte) {
 		idx++
-		if b == nil {
-			b = prevFrame
-		}
-		prevFrame = b
-		block := []byte{
-			129,
-			0, 0,
-			128,
-		}
-		block = append(block, b...)
+		copy(block[4:], b)
 		e.Emit(
 			matroska.Cluster(
 				matroska.Timecode(ebml.Uint(idx*int(time.Second/time.Duration(*fps)))),
