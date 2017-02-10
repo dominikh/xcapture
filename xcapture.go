@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"time"
@@ -154,13 +155,19 @@ func main() {
 	}
 
 	go func() {
-		t := time.NewTicker(time.Second / time.Duration(*fps))
-		for range t.C {
+		d := time.Second / time.Duration(*fps)
+		t := time.NewTicker(d)
+		pts := time.Now()
+		dropped := 0
+		for ts := range t.C {
+			fps := float64(time.Second) / float64(ts.Sub(pts))
+			fmt.Fprintf(os.Stderr, "\rFrame time: %14s (%4.2f FPS); %5d dropped; %4dx%4d -> %4dx%4d          ", ts.Sub(pts), fps, dropped, width, height, width, height)
+			pts = ts
 			select {
 			case b := <-ch:
 				sendFrame(b)
 			default:
-				log.Println("dropped frame")
+				dropped++
 				sendFrame(nil)
 			}
 		}
