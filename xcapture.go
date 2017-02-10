@@ -240,16 +240,16 @@ func main() {
 				if ev.Width != width || ev.Height != height {
 					width = ev.Width
 					height = ev.Height
-				}
 
-				// DRY
-				xproto.FreePixmap(xu.Conn(), pix)
-				var err error
-				pix, err = xproto.NewPixmapId(xu.Conn())
-				if err != nil {
-					log.Fatal("Could not obtain ID for pixmap:", err)
+					// DRY
+					xproto.FreePixmap(xu.Conn(), pix)
+					var err error
+					pix, err = xproto.NewPixmapId(xu.Conn())
+					if err != nil {
+						log.Fatal("Could not obtain ID for pixmap:", err)
+					}
+					composite.NameWindowPixmap(xu.Conn(), xproto.Window(*win), pix)
 				}
-				composite.NameWindowPixmap(xu.Conn(), xproto.Window(*win), pix)
 			}
 		}
 		offset := buf.PageOffset(i)
