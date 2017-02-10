@@ -24,6 +24,7 @@ import (
 )
 
 const bytesPerPixel = 4
+const numPages = 3
 
 type Buffer struct {
 	Width  int
@@ -130,7 +131,7 @@ func main() {
 	width := geom.Width
 	height := geom.Height
 
-	buf, err := NewBuffer(int(width), int(height), 2)
+	buf, err := NewBuffer(int(width), int(height), numPages)
 	if err != nil {
 		log.Fatal("Could not create shared memory:", err)
 	}
@@ -241,7 +242,6 @@ func main() {
 		}
 	}()
 
-	scratch := make([]byte, buf.PageSize())
 	for {
 		select {
 		case ev := <-configureEvents:
@@ -276,23 +276,22 @@ func main() {
 
 			page := buf.Page(i)
 
-			// TODO(dh): instead of copying into scratch and back, we
-			// should have a third page that we can copy into and send
-			// directly onto the channel
 			if int(w) < buf.Width || int(h) < buf.Height {
-				copy(scratch, page)
-				for i := range page {
-					page[i] = 0
+				i = (i + 1) % numPages
+				dest := buf.Page(i)
+				for i := range dest {
+					dest[i] = 0
 				}
 				for i := 0; i < int(h); i++ {
-					copy(page[i*buf.Width*bytesPerPixel:], scratch[i*int(w)*bytesPerPixel:(i+1)*int(w)*bytesPerPixel])
+					copy(dest[i*buf.Width*bytesPerPixel:], page[i*int(w)*bytesPerPixel:(i+1)*int(w)*bytesPerPixel])
 				}
+				page = dest
 			}
 
 			drawCursor(xu, *win, buf, page)
 
 			ch <- page
-			i = (i + 1) % 2
+			i = (i + 1) % numPages
 		}
 	}
 }
