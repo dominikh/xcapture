@@ -17,6 +17,7 @@ import (
 
 	"github.com/BurntSushi/xgb/composite"
 	xshm "github.com/BurntSushi/xgb/shm"
+	"github.com/BurntSushi/xgb/xfixes"
 	"github.com/BurntSushi/xgb/xproto"
 	"github.com/BurntSushi/xgbutil"
 	"github.com/BurntSushi/xgbutil/xevent"
@@ -97,6 +98,10 @@ func main() {
 	if err := composite.Init(xu.Conn()); err != nil {
 		log.Fatal("COMPOSITE extension is not available:", err)
 	}
+	if err := xfixes.Init(xu.Conn()); err != nil {
+		log.Fatal("XFIXES extension is not available:", err)
+	}
+	xfixes.QueryVersion(xu.Conn(), 1, 0)
 	if err := xshm.Init(xu.Conn()); err != nil {
 		// TODO(dh) implement a slower version that is not using SHM
 		log.Fatal("MIT-SHM extension is not available:", err)
@@ -268,6 +273,7 @@ func main() {
 				log.Println("Could not fetch window contents:", err)
 				continue
 			}
+
 			page := buf.Page(i)
 			copy(scratch, page)
 
@@ -284,8 +290,41 @@ func main() {
 				}
 			}
 
+			drawCursor(xu, *win, buf, page)
+
 			ch <- page
 			i = (i + 1) % 2
 		}
+	}
+}
+
+func drawCursor(xu *xgbutil.XUtil, win uint, buf Buffer, page []byte) {
+	cursor, err := xfixes.GetCursorImage(xu.Conn()).Reply()
+	if err != nil {
+		return
+	}
+	pos, err := xproto.TranslateCoordinates(xu.Conn(), xu.RootWin(), xproto.Window(win), cursor.X, cursor.Y).Reply()
+	if err != nil {
+		return
+	}
+	if pos.DstY < 0 || pos.DstX < 0 || int(pos.DstY) > buf.Height || int(pos.DstX) > buf.Width {
+		// cursor outside of our window
+		return
+	}
+	for i, p := range cursor.CursorImage {
+		row := i/int(cursor.Width) + int(pos.DstY) - int(cursor.Yhot)
+		col := i%int(cursor.Width) + int(pos.DstX) - int(cursor.Xhot)
+		if row >= buf.Height || col >= buf.Width || row < 0 || col < 0 {
+			// cursor is partially off-screen
+			break
+		}
+		off := row*buf.Width*bytesPerPixel + col*bytesPerPixel
+		alpha := (p >> 24) + 1
+		invAlpha := uint32(256 - (p >> 24))
+
+		page[off+3] = 255
+		page[off+2] = byte((alpha*uint32(byte(p>>16)) + invAlpha*uint32(page[off+2])) >> 8)
+		page[off+1] = byte((alpha*uint32(byte(p>>8)) + invAlpha*uint32(page[off+1])) >> 8)
+		page[off+0] = byte((alpha*uint32(byte(p>>0)) + invAlpha*uint32(page[off+0])) >> 8)
 	}
 }
