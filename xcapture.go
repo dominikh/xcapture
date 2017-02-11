@@ -318,14 +318,9 @@ func main() {
 			}
 		}
 		offset := buf.PageOffset(i)
-		w := win.Width
-		if w > canvas.Width {
-			w = canvas.Width
-		}
-		h := win.Height
-		if h > canvas.Height {
-			h = canvas.Height
-		}
+		w := min(win.Width, canvas.Width)
+		h := min(win.Height, canvas.Height)
+
 		_, err := xshm.GetImage(xu.Conn(), xproto.Drawable(pix), 0, 0, uint16(w), uint16(h), 0xFFFFFFFF, xproto.ImageFormatZPixmap, segID, uint32(offset)).Reply()
 		if err != nil {
 			log.Println("Could not fetch window contents:", err)
