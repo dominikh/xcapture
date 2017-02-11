@@ -18,6 +18,7 @@ import (
 	"honnef.co/go/xcapture/internal/shm"
 
 	"github.com/BurntSushi/xgb/composite"
+	"github.com/BurntSushi/xgb/damage"
 	xshm "github.com/BurntSushi/xgb/shm"
 	"github.com/BurntSushi/xgb/xfixes"
 	"github.com/BurntSushi/xgb/xproto"
@@ -290,19 +291,37 @@ func main() {
 		}
 	}()
 
+	if err := damage.Init(xu.Conn()); err != nil {
+		// XXX fail back gracefully
+		log.Fatal(err)
+	}
+	damage.QueryVersion(xu.Conn(), 1, 1)
+	dmg, err := damage.NewDamageId(xu.Conn())
+	if err != nil {
+		// XXX fall back gracefully
+		log.Fatal(err)
+	}
+	damage.Create(xu.Conn(), dmg, xproto.Drawable(win.ID), damage.ReportLevelRawRectangles)
+
+	damaged := false
 	for {
+		damaged = false
 		var cfgev *xproto.ConfigureNotifyEvent
+		ev, xgberr := xu.Conn().WaitForEvent()
 		for {
-			ev, err := xu.Conn().PollForEvent()
-			if err != nil {
+			if xgberr != nil {
 				continue
 			}
 			if ev == nil {
 				break
 			}
-			if ev, ok := ev.(xproto.ConfigureNotifyEvent); ok {
+			switch ev := ev.(type) {
+			case xproto.ConfigureNotifyEvent:
 				cfgev = &ev
+			case damage.NotifyEvent:
+				damaged = true
 			}
+			ev, xgberr = xu.Conn().PollForEvent()
 		}
 		if cfgev != nil {
 			if int(cfgev.Width) != win.Width || int(cfgev.Height) != win.Height || int(cfgev.BorderWidth) != win.BorderWidth {
@@ -319,6 +338,10 @@ func main() {
 				}
 				composite.NameWindowPixmap(xu.Conn(), xproto.Window(win.ID), pix)
 			}
+		}
+		if !damaged {
+			// XXX we need to check if the mouse position changed
+			continue
 		}
 		offset := buf.PageOffset(i)
 		w := min(win.Width, canvas.Width)
