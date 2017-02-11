@@ -27,6 +27,19 @@ import (
 const bytesPerPixel = 4
 const numPages = 3
 
+func min(xs ...int) int {
+	if len(xs) == 0 {
+		return 0
+	}
+	m := xs[0]
+	for _, x := range xs[1:] {
+		if x < m {
+			m = x
+		}
+	}
+	return m
+}
+
 // TODO(dh): this definition of a window is specific to Linux. On
 // Windows, for example, we wouldn't have an integer specifier for the
 // window.
@@ -333,14 +346,14 @@ func main() {
 			page = dest
 		}
 
-		drawCursor(xu, win.ID, buf, page, canvas)
+		drawCursor(xu, win, buf, page, canvas)
 
 		ch <- page
 		i = (i + 1) % numPages
 	}
 }
 
-func drawCursor(xu *xgbutil.XUtil, win int, buf Buffer, page []byte, canvas Canvas) {
+func drawCursor(xu *xgbutil.XUtil, win Window, buf Buffer, page []byte, canvas Canvas) {
 	// TODO(dh): We don't need to fetch the cursor image every time.
 	// We could listen to cursor notify events, fetch the cursor if we
 	// haven't seen it yet, then cache the cursor.
@@ -348,11 +361,13 @@ func drawCursor(xu *xgbutil.XUtil, win int, buf Buffer, page []byte, canvas Canv
 	if err != nil {
 		return
 	}
-	pos, err := xproto.TranslateCoordinates(xu.Conn(), xu.RootWin(), xproto.Window(win), cursor.X, cursor.Y).Reply()
+	pos, err := xproto.TranslateCoordinates(xu.Conn(), xu.RootWin(), xproto.Window(win.ID), cursor.X, cursor.Y).Reply()
 	if err != nil {
 		return
 	}
-	if pos.DstY < 0 || pos.DstX < 0 || int(pos.DstY) > canvas.Height || int(pos.DstX) > canvas.Width {
+	maxWidth := min(win.Width, canvas.Width)
+	maxHeight := min(win.Height, canvas.Height)
+	if pos.DstY < 0 || pos.DstX < 0 || int(pos.DstY) > maxHeight || int(pos.DstX) > maxWidth {
 		// cursor outside of our window
 		return
 	}
