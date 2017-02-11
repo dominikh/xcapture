@@ -8,6 +8,8 @@ import (
 	"log"
 	"os"
 	"reflect"
+	"strconv"
+	"strings"
 	"time"
 	"unsafe"
 
@@ -24,6 +26,16 @@ import (
 
 const bytesPerPixel = 4
 const numPages = 3
+
+// TODO(dh): this definition of a window is specific to Linux. On
+// Windows, for example, we wouldn't have an integer specifier for the
+// window.
+
+type Window struct {
+	Width  int
+	Height int
+	ID     int
+}
 
 type Canvas struct {
 	Width  int
@@ -85,10 +97,33 @@ func NewBuffer(pageSize, pages int) (Buffer, error) {
 	}, nil
 }
 
+func parseSize(s string) (width, height int, err error) {
+	err = fmt.Errorf("%q is not a valid size specification", s)
+	if len(s) < 3 {
+		return 0, 0, err
+	}
+	parts := strings.Split(s, "x")
+	if len(parts) != 2 {
+		return 0, 0, err
+	}
+	width, err = strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid width: %s", err)
+	}
+	height, err = strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid height: %s", err)
+	}
+	return width, height, err
+}
+
 func main() {
 	fps := flag.Uint("fps", 60, "FPS")
-	win := flag.Uint("win", 0, "Window ID")
+	winID := flag.Int("win", 0, "Window ID")
+	size := flag.String("size", "", "Canvas size in the format WxH in pixels. Defaults to the initial size of the captured window")
 	flag.Parse()
+
+	win := Window{ID: *winID}
 
 	xu, err := xgbutil.NewConn()
 	if err != nil {
@@ -105,7 +140,7 @@ func main() {
 		// TODO(dh) implement a slower version that is not using SHM
 		log.Fatal("MIT-SHM extension is not available:", err)
 	}
-	if err := composite.RedirectWindowChecked(xu.Conn(), xproto.Window(*win), composite.RedirectAutomatic).Check(); err != nil {
+	if err := composite.RedirectWindowChecked(xu.Conn(), xproto.Window(win.ID), composite.RedirectAutomatic).Check(); err != nil {
 		if err, ok := err.(xproto.AccessError); ok {
 			log.Fatal("Can't capture window, another program seems to be capturing it already:", err)
 		}
@@ -115,25 +150,42 @@ func main() {
 	if err != nil {
 		log.Fatal("Could not obtain ID for pixmap:", err)
 	}
-	composite.NameWindowPixmap(xu.Conn(), xproto.Window(*win), pix)
+	composite.NameWindowPixmap(xu.Conn(), xproto.Window(win.ID), pix)
 
 	segID, err := xshm.NewSegId(xu.Conn())
 	if err != nil {
 		log.Fatal("Could not obtain ID for SHM:", err)
 	}
 
-	geom, err := xproto.GetGeometry(xu.Conn(), xproto.Drawable(*win)).Reply()
+	// Register event before we query the window size for the first
+	// time. Otherwise we could race and miss a window resize.
+	err = xproto.ChangeWindowAttributesChecked(xu.Conn(), xproto.Window(win.ID),
+		xproto.CwEventMask, []uint32{uint32(xproto.EventMaskStructureNotify)}).Check()
+	if err != nil {
+		log.Fatal("Couldn't monitor window for size changes:", err)
+	}
+	geom, err := xproto.GetGeometry(xu.Conn(), xproto.Drawable(win.ID)).Reply()
 	if err != nil {
 		log.Fatal("Could not determine window dimensions:", err)
 	}
-	width := geom.Width
-	height := geom.Height
 
-	canvas := Canvas{
-		Width:  int(width),
-		Height: int(height),
+	win.Width = int(geom.Width)
+	win.Height = int(geom.Height)
+	var canvas Canvas
+	if *size != "" {
+		width, height, err := parseSize(*size)
+		if err != nil {
+			log.Fatal(err)
+		}
+		canvas = Canvas{width, height}
+	} else {
+		canvas = Canvas{
+			Width:  win.Width,
+			Height: win.Height,
+		}
 	}
-	buf, err := NewBuffer(int(width)*int(height)*bytesPerPixel, numPages)
+
+	buf, err := NewBuffer(int(canvas.Width)*int(canvas.Height)*bytesPerPixel, numPages)
 	if err != nil {
 		log.Fatal("Could not create shared memory:", err)
 	}
@@ -145,8 +197,8 @@ func main() {
 	ch := make(chan []byte)
 
 	bmp := BitmapInfoHeader{
-		Width:    int32(width),
-		Height:   int32(-height),
+		Width:    int32(canvas.Width),
+		Height:   int32(-canvas.Height),
 		Planes:   1,
 		BitCount: 32,
 	}
@@ -180,17 +232,11 @@ func main() {
 				matroska.CodecID(ebml.String("V_MS/VFW/FOURCC")),
 				matroska.CodecPrivate(ebml.Binary(codec.Bytes())),
 				matroska.Video(
-					matroska.PixelWidth(ebml.Uint(width)),
-					matroska.PixelHeight(ebml.Uint(height)),
+					matroska.PixelWidth(ebml.Uint(canvas.Width)),
+					matroska.PixelHeight(ebml.Uint(canvas.Height)),
 					matroska.ColourSpace(ebml.Binary("BGRA")),
 					matroska.Colour(
 						matroska.BitsPerChannel(ebml.Uint(8)))))))
-
-	err = xproto.ChangeWindowAttributesChecked(xu.Conn(), xproto.Window(*win),
-		xproto.CwEventMask, []uint32{uint32(xproto.EventMaskStructureNotify)}).Check()
-	if err != nil {
-		log.Fatal("Couldn't monitor window for size changes:", err)
-	}
 
 	idx := -1
 	block := make([]byte, buf.PageSize+4)
@@ -244,9 +290,9 @@ func main() {
 			}
 		}
 		if cfgev != nil {
-			if cfgev.Width != width || cfgev.Height != height {
-				width = cfgev.Width
-				height = cfgev.Height
+			if int(cfgev.Width) != win.Width || int(cfgev.Height) != win.Height {
+				win.Width = int(cfgev.Width)
+				win.Height = int(cfgev.Height)
 
 				// DRY
 				xproto.FreePixmap(xu.Conn(), pix)
@@ -255,19 +301,19 @@ func main() {
 				if err != nil {
 					log.Fatal("Could not obtain ID for pixmap:", err)
 				}
-				composite.NameWindowPixmap(xu.Conn(), xproto.Window(*win), pix)
+				composite.NameWindowPixmap(xu.Conn(), xproto.Window(win.ID), pix)
 			}
 		}
 		offset := buf.PageOffset(i)
-		w := width
-		if int(w) > canvas.Width {
-			w = uint16(canvas.Width)
+		w := win.Width
+		if w > canvas.Width {
+			w = canvas.Width
 		}
-		h := height
-		if int(h) > canvas.Height {
-			h = uint16(canvas.Height)
+		h := win.Height
+		if h > canvas.Height {
+			h = canvas.Height
 		}
-		_, err := xshm.GetImage(xu.Conn(), xproto.Drawable(pix), 0, 0, w, h, 0xFFFFFFFF, xproto.ImageFormatZPixmap, segID, uint32(offset)).Reply()
+		_, err := xshm.GetImage(xu.Conn(), xproto.Drawable(pix), 0, 0, uint16(w), uint16(h), 0xFFFFFFFF, xproto.ImageFormatZPixmap, segID, uint32(offset)).Reply()
 		if err != nil {
 			log.Println("Could not fetch window contents:", err)
 			continue
@@ -275,26 +321,26 @@ func main() {
 
 		page := buf.Page(i)
 
-		if int(w) < canvas.Width || int(h) < canvas.Height {
+		if w < canvas.Width || h < canvas.Height {
 			i = (i + 1) % numPages
 			dest := buf.Page(i)
 			for i := range dest {
 				dest[i] = 0
 			}
-			for i := 0; i < int(h); i++ {
-				copy(dest[i*canvas.Width*bytesPerPixel:], page[i*int(w)*bytesPerPixel:(i+1)*int(w)*bytesPerPixel])
+			for i := 0; i < h; i++ {
+				copy(dest[i*canvas.Width*bytesPerPixel:], page[i*w*bytesPerPixel:(i+1)*w*bytesPerPixel])
 			}
 			page = dest
 		}
 
-		drawCursor(xu, *win, buf, page, canvas)
+		drawCursor(xu, win.ID, buf, page, canvas)
 
 		ch <- page
 		i = (i + 1) % numPages
 	}
 }
 
-func drawCursor(xu *xgbutil.XUtil, win uint, buf Buffer, page []byte, canvas Canvas) {
+func drawCursor(xu *xgbutil.XUtil, win int, buf Buffer, page []byte, canvas Canvas) {
 	// TODO(dh): We don't need to fetch the cursor image every time.
 	// We could listen to cursor notify events, fetch the cursor if we
 	// haven't seen it yet, then cache the cursor.
