@@ -214,8 +214,7 @@ func main() {
 		dropped := 0
 		for ts := range t.C {
 			fps := float64(time.Second) / float64(ts.Sub(pts))
-			// XXX we are racing on width and height
-			fmt.Fprintf(os.Stderr, "\rFrame time: %14s (%4.2f FPS); %5d dropped; %4dx%4d -> %4dx%4d          ", ts.Sub(pts), fps, dropped, width, height, buf.Width, buf.Height)
+			fmt.Fprintf(os.Stderr, "\rFrame time: %14s (%4.2f FPS); %5d dropped          ", ts.Sub(pts), fps, dropped)
 			pts = ts
 			select {
 			case b := <-ch:
@@ -293,6 +292,9 @@ func main() {
 }
 
 func drawCursor(xu *xgbutil.XUtil, win uint, buf Buffer, page []byte) {
+	// TODO(dh): We don't need to fetch the cursor image every time.
+	// We could listen to cursor notify events, fetch the cursor if we
+	// haven't seen it yet, then cache the cursor.
 	cursor, err := xfixes.GetCursorImage(xu.Conn()).Reply()
 	if err != nil {
 		return
