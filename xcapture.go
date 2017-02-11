@@ -25,25 +25,25 @@ import (
 const bytesPerPixel = 4
 const numPages = 3
 
-type Buffer struct {
+type Canvas struct {
 	Width  int
 	Height int
-	Pages  int
-	Data   []byte
-	ShmID  int
+}
+
+type Buffer struct {
+	Pages    int
+	PageSize int
+	Data     []byte
+	ShmID    int
 }
 
 func (b Buffer) PageOffset(idx int) int {
-	return b.PageSize() * idx
-}
-
-func (b Buffer) PageSize() int {
-	return b.Width * b.Height * bytesPerPixel
+	return b.PageSize * idx
 }
 
 func (b Buffer) Page(idx int) []byte {
 	offset := b.PageOffset(idx)
-	size := b.PageSize()
+	size := b.PageSize
 	return b.Data[offset : offset+size : offset+size]
 }
 
@@ -61,8 +61,8 @@ type BitmapInfoHeader struct {
 	ClrImportant  uint32
 }
 
-func NewBuffer(width, height, pages int) (Buffer, error) {
-	size := width * height * pages * bytesPerPixel
+func NewBuffer(pageSize, pages int) (Buffer, error) {
+	size := pageSize * pages
 	seg, err := shm.Create(size)
 	if err != nil {
 		return Buffer{}, err
@@ -78,11 +78,10 @@ func NewBuffer(width, height, pages int) (Buffer, error) {
 	}
 	b := (*(*[]byte)(unsafe.Pointer(sh)))
 	return Buffer{
-		Width:  width,
-		Height: height,
-		Pages:  pages,
-		Data:   b,
-		ShmID:  seg.ID,
+		Pages:    pages,
+		PageSize: pageSize,
+		Data:     b,
+		ShmID:    seg.ID,
 	}, nil
 }
 
@@ -130,7 +129,11 @@ func main() {
 	width := geom.Width
 	height := geom.Height
 
-	buf, err := NewBuffer(int(width), int(height), numPages)
+	canvas := Canvas{
+		Width:  int(width),
+		Height: int(height),
+	}
+	buf, err := NewBuffer(int(width)*int(height)*bytesPerPixel, numPages)
 	if err != nil {
 		log.Fatal("Could not create shared memory:", err)
 	}
@@ -190,7 +193,7 @@ func main() {
 	}
 
 	idx := -1
-	block := make([]byte, buf.PageSize()+4)
+	block := make([]byte, buf.PageSize+4)
 	block[0] = 129
 	block[3] = 128
 	sendFrame := func(b []byte) {
@@ -257,12 +260,12 @@ func main() {
 		}
 		offset := buf.PageOffset(i)
 		w := width
-		if int(w) > buf.Width {
-			w = uint16(buf.Width)
+		if int(w) > canvas.Width {
+			w = uint16(canvas.Width)
 		}
 		h := height
-		if int(h) > buf.Height {
-			h = uint16(buf.Height)
+		if int(h) > canvas.Height {
+			h = uint16(canvas.Height)
 		}
 		_, err := xshm.GetImage(xu.Conn(), xproto.Drawable(pix), 0, 0, w, h, 0xFFFFFFFF, xproto.ImageFormatZPixmap, segID, uint32(offset)).Reply()
 		if err != nil {
@@ -272,26 +275,26 @@ func main() {
 
 		page := buf.Page(i)
 
-		if int(w) < buf.Width || int(h) < buf.Height {
+		if int(w) < canvas.Width || int(h) < canvas.Height {
 			i = (i + 1) % numPages
 			dest := buf.Page(i)
 			for i := range dest {
 				dest[i] = 0
 			}
 			for i := 0; i < int(h); i++ {
-				copy(dest[i*buf.Width*bytesPerPixel:], page[i*int(w)*bytesPerPixel:(i+1)*int(w)*bytesPerPixel])
+				copy(dest[i*canvas.Width*bytesPerPixel:], page[i*int(w)*bytesPerPixel:(i+1)*int(w)*bytesPerPixel])
 			}
 			page = dest
 		}
 
-		drawCursor(xu, *win, buf, page)
+		drawCursor(xu, *win, buf, page, canvas)
 
 		ch <- page
 		i = (i + 1) % numPages
 	}
 }
 
-func drawCursor(xu *xgbutil.XUtil, win uint, buf Buffer, page []byte) {
+func drawCursor(xu *xgbutil.XUtil, win uint, buf Buffer, page []byte, canvas Canvas) {
 	// TODO(dh): We don't need to fetch the cursor image every time.
 	// We could listen to cursor notify events, fetch the cursor if we
 	// haven't seen it yet, then cache the cursor.
@@ -303,18 +306,18 @@ func drawCursor(xu *xgbutil.XUtil, win uint, buf Buffer, page []byte) {
 	if err != nil {
 		return
 	}
-	if pos.DstY < 0 || pos.DstX < 0 || int(pos.DstY) > buf.Height || int(pos.DstX) > buf.Width {
+	if pos.DstY < 0 || pos.DstX < 0 || int(pos.DstY) > canvas.Height || int(pos.DstX) > canvas.Width {
 		// cursor outside of our window
 		return
 	}
 	for i, p := range cursor.CursorImage {
 		row := i/int(cursor.Width) + int(pos.DstY) - int(cursor.Yhot)
 		col := i%int(cursor.Width) + int(pos.DstX) - int(cursor.Xhot)
-		if row >= buf.Height || col >= buf.Width || row < 0 || col < 0 {
+		if row >= canvas.Height || col >= canvas.Width || row < 0 || col < 0 {
 			// cursor is partially off-screen
 			break
 		}
-		off := row*buf.Width*bytesPerPixel + col*bytesPerPixel
+		off := row*canvas.Width*bytesPerPixel + col*bytesPerPixel
 		alpha := (p >> 24) + 1
 		invAlpha := uint32(256 - (p >> 24))
 
