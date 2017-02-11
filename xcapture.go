@@ -45,9 +45,10 @@ func min(xs ...int) int {
 // window.
 
 type Window struct {
-	Width  int
-	Height int
-	ID     int
+	Width       int
+	Height      int
+	BorderWidth int
+	ID          int
 }
 
 type Canvas struct {
@@ -184,6 +185,7 @@ func main() {
 
 	win.Width = int(geom.Width)
 	win.Height = int(geom.Height)
+	win.BorderWidth = int(geom.BorderWidth)
 	var canvas Canvas
 	if *size != "" {
 		width, height, err := parseSize(*size)
@@ -303,9 +305,10 @@ func main() {
 			}
 		}
 		if cfgev != nil {
-			if int(cfgev.Width) != win.Width || int(cfgev.Height) != win.Height {
+			if int(cfgev.Width) != win.Width || int(cfgev.Height) != win.Height || int(cfgev.BorderWidth) != win.BorderWidth {
 				win.Width = int(cfgev.Width)
 				win.Height = int(cfgev.Height)
+				win.BorderWidth = int(cfgev.BorderWidth)
 
 				// DRY
 				xproto.FreePixmap(xu.Conn(), pix)
@@ -321,7 +324,7 @@ func main() {
 		w := min(win.Width, canvas.Width)
 		h := min(win.Height, canvas.Height)
 
-		_, err := xshm.GetImage(xu.Conn(), xproto.Drawable(pix), 0, 0, uint16(w), uint16(h), 0xFFFFFFFF, xproto.ImageFormatZPixmap, segID, uint32(offset)).Reply()
+		_, err := xshm.GetImage(xu.Conn(), xproto.Drawable(pix), int16(win.BorderWidth), int16(win.BorderWidth), uint16(w), uint16(h), 0xFFFFFFFF, xproto.ImageFormatZPixmap, segID, uint32(offset)).Reply()
 		if err != nil {
 			log.Println("Could not fetch window contents:", err)
 			continue
