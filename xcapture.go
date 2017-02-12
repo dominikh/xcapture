@@ -13,6 +13,7 @@ import (
 
 	"honnef.co/go/xcapture/internal/shm"
 
+	"github.com/BurntSushi/xgb"
 	"github.com/BurntSushi/xgb/composite"
 	"github.com/BurntSushi/xgb/damage"
 	xshm "github.com/BurntSushi/xgb/shm"
@@ -253,25 +254,78 @@ func main() {
 	}
 	damage.Create(xu.Conn(), dmg, xproto.Drawable(win.ID), damage.ReportLevelRawRectangles)
 
+	var prevCursor struct{ X, Y int }
+	cursorEvents := make(chan struct{ X, Y int }, 1)
+	go func() {
+		d := time.Second / time.Duration(*fps)
+		t := time.NewTicker(d)
+		for range t.C {
+			cursor, err := xproto.QueryPointer(xu.Conn(), xproto.Window(win.ID)).Reply()
+			if err != nil {
+				log.Println("Couldn't query cursor position:", err)
+				continue
+			}
+			c := struct{ X, Y int }{int(cursor.WinX), int(cursor.WinY)}
+			if c != prevCursor {
+				prevCursor = c
+				select {
+				case cursorEvents <- c:
+				default:
+				}
+			}
+		}
+	}()
+	xEvents := make(chan xgb.Event, 1)
+	go func() {
+		for {
+			ev, err := xu.Conn().WaitForEvent()
+			if err != nil {
+				continue
+			}
+			select {
+			case xEvents <- ev:
+			default:
+			}
+		}
+	}()
 	damaged := false
+	prevInWindow := true
 	for {
 		damaged = false
 		var cfgev *xproto.ConfigureNotifyEvent
-		ev, xgberr := xu.Conn().WaitForEvent()
-		for {
-			if xgberr != nil {
-				continue
-			}
-			if ev == nil {
-				break
-			}
+
+		checkEvent := func(ev xgb.Event) {
 			switch ev := ev.(type) {
 			case xproto.ConfigureNotifyEvent:
 				cfgev = &ev
 			case damage.NotifyEvent:
 				damaged = true
 			}
-			ev, xgberr = xu.Conn().PollForEvent()
+		}
+		select {
+		case c := <-cursorEvents:
+			if c.X < 0 || c.Y < 0 || c.X > win.Width || c.Y > win.Height {
+				if prevInWindow {
+					// cursor moved out of the window, which requires a redraw
+					damaged = true
+				}
+				prevInWindow = false
+			} else {
+				damaged = true
+			}
+		case ev := <-xEvents:
+			checkEvent(ev)
+		}
+
+		for {
+			ev, xgberr := xu.Conn().PollForEvent()
+			if xgberr != nil {
+				continue
+			}
+			if ev == nil {
+				break
+			}
+			checkEvent(ev)
 		}
 		if cfgev != nil {
 			if int(cfgev.Width) != win.Width || int(cfgev.Height) != win.Height || int(cfgev.BorderWidth) != win.BorderWidth {
@@ -290,7 +344,6 @@ func main() {
 			}
 		}
 		if !damaged {
-			// XXX we need to check if the mouse position changed
 			continue
 		}
 		offset := buf.PageOffset(i)
