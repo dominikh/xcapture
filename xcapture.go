@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"encoding/binary"
 	"flag"
 	"fmt"
 	"log"
@@ -13,8 +11,6 @@ import (
 	"time"
 	"unsafe"
 
-	"honnef.co/go/matroska"
-	"honnef.co/go/matroska/ebml"
 	"honnef.co/go/xcapture/internal/shm"
 
 	"github.com/BurntSushi/xgb/composite"
@@ -217,84 +213,9 @@ func main() {
 	i := 0
 	ch := make(chan Frame)
 
-	bmp := BitmapInfoHeader{
-		Width:    int32(canvas.Width),
-		Height:   int32(-canvas.Height),
-		Planes:   1,
-		BitCount: 32,
-	}
-	codec := &bytes.Buffer{}
-	if err := binary.Write(codec, binary.LittleEndian, bmp); err != nil {
-		panic(err)
-	}
-
-	e := ebml.NewEncoder(os.Stdout)
-	e.Emit(
-		ebml.EBML(
-			ebml.DocType(ebml.String("matroska")),
-			ebml.DocTypeVersion(ebml.Uint(4)),
-			ebml.DocTypeReadVersion(ebml.Uint(1))))
-
-	e.EmitHeader(matroska.Segment, -1)
-	e.Emit(
-		matroska.Info(
-			matroska.TimecodeScale(ebml.Uint(1)),
-			matroska.MuxingApp(ebml.UTF8("honnef.co/go/mkv")),
-			matroska.WritingApp(ebml.UTF8("xcapture"))))
-
-	e.Emit(
-		matroska.Tracks(
-			matroska.TrackEntry(
-				matroska.TrackNumber(ebml.Uint(1)),
-				matroska.TrackUID(ebml.Uint(0xDEADBEEF)),
-				matroska.TrackType(ebml.Uint(1)),
-				matroska.FlagLacing(ebml.Uint(0)),
-				matroska.DefaultDuration(ebml.Uint(time.Second/time.Duration(*fps))),
-				matroska.CodecID(ebml.String("V_MS/VFW/FOURCC")),
-				matroska.CodecPrivate(ebml.Binary(codec.Bytes())),
-				matroska.Video(
-					matroska.PixelWidth(ebml.Uint(canvas.Width)),
-					matroska.PixelHeight(ebml.Uint(canvas.Height)),
-					matroska.ColourSpace(ebml.Binary("BGRA")),
-					matroska.Colour(
-						matroska.BitsPerChannel(ebml.Uint(8)))))))
-
-	block := make([]byte, buf.PageSize+4)
-	block[0] = 129
-
-	var prevFrame Frame
-	var firstTime time.Time
-	sendFrame := func(frame Frame) {
-		if prevFrame.Data == nil && frame.Data != nil {
-			// This is our first frame
-			prevFrame = frame
-			firstTime = frame.Time
-			return
-		}
-		if frame.Data == nil {
-			// No new frame. If it's been 1s since the last frame,
-			// emit the previous frame again, to avoid having very
-			// long frame durations, which stalls some video players
-			// and risks data loss in case of a crash.
-			if frame.Time.Sub(prevFrame.Time) < time.Second {
-				return
-			}
-			frame.Data = prevFrame.Data
-		}
-		copy(block[4:], prevFrame.Data)
-		ts := prevFrame.Time.Sub(firstTime)
-		e.Emit(
-			matroska.Cluster(
-				matroska.Timecode(ebml.Uint(ts)),
-				matroska.Position(ebml.Uint(0)),
-				matroska.BlockGroup(
-					matroska.BlockDuration(ebml.Uint(frame.Time.Sub(prevFrame.Time))),
-					matroska.Block(ebml.Binary(block)))))
-
-		prevFrame = frame
-		if e.Err != nil {
-			log.Fatal(err)
-		}
+	vw := NewVideoWriter(canvas, int(*fps), os.Stdout)
+	if err := vw.Start(); err != nil {
+		log.Fatal("Couldn't write output:", err)
 	}
 
 	go func() {
@@ -306,12 +227,16 @@ func main() {
 			fps := float64(time.Second) / float64(ts.Sub(pts))
 			fmt.Fprintf(os.Stderr, "\rFrame time: %14s (%4.2f FPS); %5d dup          ", ts.Sub(pts), fps, dupped)
 			pts = ts
+			var err error
 			select {
 			case frame := <-ch:
-				sendFrame(frame)
+				err = vw.SendFrame(frame)
 			default:
 				dupped++
-				sendFrame(Frame{Time: ts})
+				err = vw.SendFrame(Frame{Time: ts})
+			}
+			if err != nil {
+				log.Fatal("Couldn't write frame:", err)
 			}
 		}
 	}()
