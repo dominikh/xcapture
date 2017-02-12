@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -43,10 +44,26 @@ func min(xs ...int) int {
 // window.
 
 type Window struct {
-	Width       int
-	Height      int
-	BorderWidth int
-	ID          int
+	ID int
+
+	mu          sync.RWMutex
+	width       int
+	height      int
+	borderWidth int
+}
+
+func (w *Window) SetDimensions(width, height, border int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.width = width
+	w.height = height
+	w.borderWidth = border
+}
+
+func (w *Window) Dimensions() (width, height, border int) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.width, w.height, w.borderWidth
 }
 
 type Canvas struct {
@@ -114,6 +131,121 @@ func NewBuffer(pageSize, pages int) (Buffer, error) {
 	}, nil
 }
 
+type DamageEvent struct {
+	Resized bool
+}
+
+type DamageMonitor struct {
+	C   chan DamageEvent
+	xu  *xgbutil.XUtil
+	fps int
+	win *Window
+}
+
+func NewDamageMonitor(xu *xgbutil.XUtil, win *Window, fps int) *DamageMonitor {
+	dmg := &DamageMonitor{
+		C:   make(chan DamageEvent),
+		xu:  xu,
+		fps: fps,
+		win: win,
+	}
+	go dmg.startDamage()
+	go dmg.startCursor()
+	go dmg.start()
+	return dmg
+}
+
+func (dmg *DamageMonitor) startDamage() {
+	xdmg, err := damage.NewDamageId(dmg.xu.Conn())
+	if err != nil {
+		// XXX fall back gracefully
+		log.Fatal(err)
+	}
+	damage.Create(dmg.xu.Conn(), xdmg, xproto.Drawable(dmg.win.ID), damage.ReportLevelRawRectangles)
+
+	damaged := false
+	var cfgev *xproto.ConfigureNotifyEvent
+	checkEvent := func(ev xgb.Event) {
+		switch ev := ev.(type) {
+		case xproto.ConfigureNotifyEvent:
+			cfgev = &ev
+		case damage.NotifyEvent:
+			damaged = true
+		}
+	}
+	for {
+		ev, err := dmg.xu.Conn().WaitForEvent()
+		if err != nil {
+			continue
+		}
+
+		checkEvent(ev)
+		for {
+			ev, xgberr := dmg.xu.Conn().PollForEvent()
+			if xgberr != nil {
+				continue
+			}
+			if ev == nil {
+				break
+			}
+			checkEvent(ev)
+		}
+
+		resized := false
+		w, h, bw := dmg.win.Dimensions()
+		if cfgev != nil && (int(cfgev.Width) != w || int(cfgev.Height) != h || int(cfgev.BorderWidth) != bw) {
+			w, h, bw = int(cfgev.Width), int(cfgev.Height), int(cfgev.BorderWidth)
+			dmg.win.SetDimensions(w, h, bw)
+			resized = true
+		}
+
+		if damaged || resized {
+			dmg.C <- DamageEvent{resized}
+		}
+	}
+}
+
+func (dmg *DamageMonitor) startCursor() {
+	var prevCursor struct{ X, Y int }
+	prevInWindow := true
+	d := time.Second / time.Duration(dmg.fps)
+	t := time.NewTicker(d)
+	for range t.C {
+		cursor, err := xproto.QueryPointer(dmg.xu.Conn(), xproto.Window(dmg.win.ID)).Reply()
+		if err != nil {
+			log.Println("Couldn't query cursor position:", err)
+			continue
+		}
+		c := struct{ X, Y int }{int(cursor.WinX), int(cursor.WinY)}
+		if c == prevCursor {
+			continue
+		}
+		prevCursor = c
+
+		damaged := false
+		w, h, _ := dmg.win.Dimensions()
+		if c.X < 0 || c.Y < 0 || c.X > w || c.Y > h {
+			if prevInWindow {
+				// cursor moved out of the window, which requires a redraw
+				damaged = true
+			}
+			prevInWindow = false
+		} else {
+			damaged = true
+		}
+		if damaged {
+			select {
+			case dmg.C <- DamageEvent{}:
+			default:
+			}
+		}
+	}
+}
+
+func (dmg *DamageMonitor) start() {
+
+}
+
 func parseSize(s string) (width, height int, err error) {
 	err = fmt.Errorf("%q is not a valid size specification", s)
 	if len(s) < 3 {
@@ -140,7 +272,7 @@ func main() {
 	size := flag.String("size", "", "Canvas size in the format WxH in pixels. Defaults to the initial size of the captured window")
 	flag.Parse()
 
-	win := Window{ID: *winID}
+	win := &Window{ID: *winID}
 
 	xu, err := xgbutil.NewConn()
 	if err != nil {
@@ -186,9 +318,7 @@ func main() {
 		log.Fatal("Could not determine window dimensions:", err)
 	}
 
-	win.Width = int(geom.Width)
-	win.Height = int(geom.Height)
-	win.BorderWidth = int(geom.BorderWidth)
+	win.SetDimensions(int(geom.Width), int(geom.Height), int(geom.BorderWidth))
 	var canvas Canvas
 	if *size != "" {
 		width, height, err := parseSize(*size)
@@ -198,8 +328,8 @@ func main() {
 		canvas = Canvas{width, height}
 	} else {
 		canvas = Canvas{
-			Width:  win.Width,
-			Height: win.Height,
+			Width:  int(geom.Width),
+			Height: int(geom.Height),
 		}
 	}
 
@@ -247,111 +377,27 @@ func main() {
 		log.Fatal(err)
 	}
 	damage.QueryVersion(xu.Conn(), 1, 1)
-	dmg, err := damage.NewDamageId(xu.Conn())
-	if err != nil {
-		// XXX fall back gracefully
-		log.Fatal(err)
-	}
-	damage.Create(xu.Conn(), dmg, xproto.Drawable(win.ID), damage.ReportLevelRawRectangles)
 
-	var prevCursor struct{ X, Y int }
-	cursorEvents := make(chan struct{ X, Y int }, 1)
-	go func() {
-		d := time.Second / time.Duration(*fps)
-		t := time.NewTicker(d)
-		for range t.C {
-			cursor, err := xproto.QueryPointer(xu.Conn(), xproto.Window(win.ID)).Reply()
+	dmg := NewDamageMonitor(xu, win, int(*fps))
+	for ev := range dmg.C {
+		if ev.Resized {
+			// DRY
+			xproto.FreePixmap(xu.Conn(), pix)
+			var err error
+			pix, err = xproto.NewPixmapId(xu.Conn())
 			if err != nil {
-				log.Println("Couldn't query cursor position:", err)
-				continue
+				log.Fatal("Could not obtain ID for pixmap:", err)
 			}
-			c := struct{ X, Y int }{int(cursor.WinX), int(cursor.WinY)}
-			if c != prevCursor {
-				prevCursor = c
-				select {
-				case cursorEvents <- c:
-				default:
-				}
-			}
-		}
-	}()
-	xEvents := make(chan xgb.Event, 1)
-	go func() {
-		for {
-			ev, err := xu.Conn().WaitForEvent()
-			if err != nil {
-				continue
-			}
-			select {
-			case xEvents <- ev:
-			default:
-			}
-		}
-	}()
-	damaged := false
-	prevInWindow := true
-	for {
-		damaged = false
-		var cfgev *xproto.ConfigureNotifyEvent
-
-		checkEvent := func(ev xgb.Event) {
-			switch ev := ev.(type) {
-			case xproto.ConfigureNotifyEvent:
-				cfgev = &ev
-			case damage.NotifyEvent:
-				damaged = true
-			}
-		}
-		select {
-		case c := <-cursorEvents:
-			if c.X < 0 || c.Y < 0 || c.X > win.Width || c.Y > win.Height {
-				if prevInWindow {
-					// cursor moved out of the window, which requires a redraw
-					damaged = true
-				}
-				prevInWindow = false
-			} else {
-				damaged = true
-			}
-		case ev := <-xEvents:
-			checkEvent(ev)
+			composite.NameWindowPixmap(xu.Conn(), xproto.Window(win.ID), pix)
 		}
 
-		for {
-			ev, xgberr := xu.Conn().PollForEvent()
-			if xgberr != nil {
-				continue
-			}
-			if ev == nil {
-				break
-			}
-			checkEvent(ev)
-		}
-		if cfgev != nil {
-			if int(cfgev.Width) != win.Width || int(cfgev.Height) != win.Height || int(cfgev.BorderWidth) != win.BorderWidth {
-				win.Width = int(cfgev.Width)
-				win.Height = int(cfgev.Height)
-				win.BorderWidth = int(cfgev.BorderWidth)
-
-				// DRY
-				xproto.FreePixmap(xu.Conn(), pix)
-				var err error
-				pix, err = xproto.NewPixmapId(xu.Conn())
-				if err != nil {
-					log.Fatal("Could not obtain ID for pixmap:", err)
-				}
-				composite.NameWindowPixmap(xu.Conn(), xproto.Window(win.ID), pix)
-			}
-		}
-		if !damaged {
-			continue
-		}
+		w, h, bw := win.Dimensions()
 		offset := buf.PageOffset(i)
-		w := min(win.Width, canvas.Width)
-		h := min(win.Height, canvas.Height)
+		w = min(w, canvas.Width)
+		h = min(h, canvas.Height)
 
 		ts := time.Now()
-		_, err := xshm.GetImage(xu.Conn(), xproto.Drawable(pix), int16(win.BorderWidth), int16(win.BorderWidth), uint16(w), uint16(h), 0xFFFFFFFF, xproto.ImageFormatZPixmap, segID, uint32(offset)).Reply()
+		_, err := xshm.GetImage(xu.Conn(), xproto.Drawable(pix), int16(bw), int16(bw), uint16(w), uint16(h), 0xFFFFFFFF, xproto.ImageFormatZPixmap, segID, uint32(offset)).Reply()
 		if err != nil {
 			log.Println("Could not fetch window contents:", err)
 			continue
@@ -378,7 +424,7 @@ func main() {
 	}
 }
 
-func drawCursor(xu *xgbutil.XUtil, win Window, buf Buffer, page []byte, canvas Canvas) {
+func drawCursor(xu *xgbutil.XUtil, win *Window, buf Buffer, page []byte, canvas Canvas) {
 	// TODO(dh): We don't need to fetch the cursor image every time.
 	// We could listen to cursor notify events, fetch the cursor if we
 	// haven't seen it yet, then cache the cursor.
@@ -390,9 +436,10 @@ func drawCursor(xu *xgbutil.XUtil, win Window, buf Buffer, page []byte, canvas C
 	if err != nil {
 		return
 	}
-	maxWidth := min(win.Width, canvas.Width)
-	maxHeight := min(win.Height, canvas.Height)
-	if pos.DstY < 0 || pos.DstX < 0 || int(pos.DstY) > maxHeight || int(pos.DstX) > maxWidth {
+	w, h, _ := win.Dimensions()
+	w = min(w, canvas.Width)
+	h = min(h, canvas.Height)
+	if pos.DstY < 0 || pos.DstX < 0 || int(pos.DstY) > h || int(pos.DstX) > w {
 		// cursor outside of our window
 		return
 	}
