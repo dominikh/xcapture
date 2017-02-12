@@ -399,7 +399,6 @@ func main() {
 		ts := time.Now()
 		_, err := xshm.GetImage(xu.Conn(), xproto.Drawable(pix), int16(bw), int16(bw), uint16(w), uint16(h), 0xFFFFFFFF, xproto.ImageFormatZPixmap, segID, uint32(offset)).Reply()
 		if err != nil {
-			log.Println("Could not fetch window contents:", err)
 			continue
 		}
 
