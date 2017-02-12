@@ -26,7 +26,7 @@ import (
 )
 
 const bytesPerPixel = 4
-const numPages = 3
+const numPages = 4
 
 func min(xs ...int) int {
 	if len(xs) == 0 {
@@ -55,6 +55,11 @@ type Window struct {
 type Canvas struct {
 	Width  int
 	Height int
+}
+
+type Frame struct {
+	Data []byte
+	Time time.Time
 }
 
 type Buffer struct {
@@ -210,7 +215,7 @@ func main() {
 	}
 
 	i := 0
-	ch := make(chan []byte)
+	ch := make(chan Frame)
 
 	bmp := BitmapInfoHeader{
 		Width:    int32(canvas.Width),
@@ -254,19 +259,39 @@ func main() {
 					matroska.Colour(
 						matroska.BitsPerChannel(ebml.Uint(8)))))))
 
-	idx := -1
 	block := make([]byte, buf.PageSize+4)
 	block[0] = 129
-	block[3] = 128
-	sendFrame := func(b []byte) {
-		idx++
-		copy(block[4:], b)
+
+	var prevFrame Frame
+	var firstTime time.Time
+	sendFrame := func(frame Frame) {
+		if prevFrame.Data == nil && frame.Data != nil {
+			// This is our first frame
+			prevFrame = frame
+			firstTime = frame.Time
+			return
+		}
+		if frame.Data == nil {
+			// No new frame. If it's been 1s since the last frame,
+			// emit the previous frame again, to avoid having very
+			// long frame durations, which stalls some video players
+			// and risks data loss in case of a crash.
+			if frame.Time.Sub(prevFrame.Time) < time.Second {
+				return
+			}
+			frame.Data = prevFrame.Data
+		}
+		copy(block[4:], prevFrame.Data)
+		ts := prevFrame.Time.Sub(firstTime)
 		e.Emit(
 			matroska.Cluster(
-				matroska.Timecode(ebml.Uint(idx*int(time.Second/time.Duration(*fps)))),
+				matroska.Timecode(ebml.Uint(ts)),
 				matroska.Position(ebml.Uint(0)),
-				matroska.SimpleBlock(ebml.Binary(block))))
+				matroska.BlockGroup(
+					matroska.BlockDuration(ebml.Uint(frame.Time.Sub(prevFrame.Time))),
+					matroska.Block(ebml.Binary(block)))))
 
+		prevFrame = frame
 		if e.Err != nil {
 			log.Fatal(err)
 		}
@@ -276,17 +301,17 @@ func main() {
 		d := time.Second / time.Duration(*fps)
 		t := time.NewTicker(d)
 		pts := time.Now()
-		dropped := 0
+		dupped := 0
 		for ts := range t.C {
 			fps := float64(time.Second) / float64(ts.Sub(pts))
-			fmt.Fprintf(os.Stderr, "\rFrame time: %14s (%4.2f FPS); %5d dropped          ", ts.Sub(pts), fps, dropped)
+			fmt.Fprintf(os.Stderr, "\rFrame time: %14s (%4.2f FPS); %5d dup          ", ts.Sub(pts), fps, dupped)
 			pts = ts
 			select {
-			case b := <-ch:
-				sendFrame(b)
+			case frame := <-ch:
+				sendFrame(frame)
 			default:
-				dropped++
-				sendFrame(nil)
+				dupped++
+				sendFrame(Frame{Time: ts})
 			}
 		}
 	}()
@@ -347,6 +372,7 @@ func main() {
 		w := min(win.Width, canvas.Width)
 		h := min(win.Height, canvas.Height)
 
+		ts := time.Now()
 		_, err := xshm.GetImage(xu.Conn(), xproto.Drawable(pix), int16(win.BorderWidth), int16(win.BorderWidth), uint16(w), uint16(h), 0xFFFFFFFF, xproto.ImageFormatZPixmap, segID, uint32(offset)).Reply()
 		if err != nil {
 			log.Println("Could not fetch window contents:", err)
@@ -369,7 +395,7 @@ func main() {
 
 		drawCursor(xu, win, buf, page, canvas)
 
-		ch <- page
+		ch <- Frame{Data: page, Time: ts}
 		i = (i + 1) % numPages
 	}
 }
