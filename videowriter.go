@@ -6,8 +6,8 @@ import (
 	"io"
 	"time"
 
-	"honnef.co/go/matroska"
-	"honnef.co/go/matroska/ebml"
+	"honnef.co/go/xcapture/internal/matroska"
+	"honnef.co/go/xcapture/internal/matroska/ebml"
 )
 
 type VideoWriter struct {
