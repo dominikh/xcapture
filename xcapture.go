@@ -213,7 +213,7 @@ type DamageMonitor struct {
 
 func NewDamageMonitor(conn *xgb.Conn, el *EventLoop, win *Window, fps int) *DamageMonitor {
 	dmg := &DamageMonitor{
-		C:    make(chan CaptureEvent),
+		C:    make(chan CaptureEvent, 1),
 		elCh: make(chan xgb.Event),
 		conn: conn,
 		fps:  fps,
@@ -235,7 +235,10 @@ func (dmg *DamageMonitor) startDamage() {
 
 	for ev := range dmg.elCh {
 		if _, ok := ev.(damage.NotifyEvent); ok {
-			dmg.C <- CaptureEvent{}
+			select {
+			case dmg.C <- CaptureEvent{}:
+			default:
+			}
 		}
 	}
 }
@@ -451,10 +454,7 @@ func main() {
 			case ev = <-res.C:
 				captureEvents <- ev
 			case ev = <-other:
-				select {
-				case captureEvents <- ev:
-				default:
-				}
+				captureEvents <- ev
 			}
 		}
 	}()
