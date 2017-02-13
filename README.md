@@ -11,6 +11,12 @@ If you're looking for an all-in-one solution that does encoding and
 overlays and effects for you, you may want to look into
 SimpleScreenRecorder or OBS instead.
 
+## Installation
+
+```
+go get -u honnef.co/go/xcapture
+```
+
 ## Usage
 
 ```
