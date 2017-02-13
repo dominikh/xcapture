@@ -135,7 +135,9 @@ For example, given a VFR recording `screen.mkv` with a maximum frame
 rate of 30 fps, you can convert it to CFR at 30 fps with the following
 command:
 
+```
 ffmpeg -i screen.mkv -vsync cfr -r 30 screen_cfr.mkv
+```
 
 (Note that we're not specifying any codec, so ffmpeg will default to
 lossy H.264. Extend the command as necessary).
