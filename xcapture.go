@@ -380,7 +380,11 @@ func main() {
 	i := 0
 	ch := make(chan Frame)
 
-	vw := NewVideoWriter(canvas, int(*fps), *cfr, os.Stdout)
+	tags := map[string]string{
+		"DATE_RECORDED": time.Now().UTC().Format("2006-01-02 15:04:05.999"),
+		"WINDOW_ID":     strconv.Itoa(win.ID),
+	}
+	vw := NewVideoWriter(canvas, int(*fps), *cfr, tags, os.Stdout)
 	if err := vw.Start(); err != nil {
 		log.Fatal("Couldn't write output:", err)
 	}

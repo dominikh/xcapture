@@ -18,11 +18,12 @@ type VideoWriter struct {
 	canvas    Canvas
 	fps       int
 	cfr       bool
+	tags      map[string]string
 
 	idx int
 }
 
-func NewVideoWriter(c Canvas, fps int, cfr bool, w io.Writer) *VideoWriter {
+func NewVideoWriter(c Canvas, fps int, cfr bool, tags map[string]string, w io.Writer) *VideoWriter {
 	const hdrSize = 4
 	return &VideoWriter{
 		enc:    ebml.NewEncoder(w),
@@ -30,6 +31,7 @@ func NewVideoWriter(c Canvas, fps int, cfr bool, w io.Writer) *VideoWriter {
 		canvas: c,
 		fps:    fps,
 		cfr:    cfr,
+		tags:   tags,
 	}
 }
 
@@ -59,6 +61,16 @@ func (vw *VideoWriter) Start() error {
 			matroska.TimecodeScale(ebml.Uint(1)),
 			matroska.MuxingApp(ebml.UTF8("honnef.co/go/mkv")),
 			matroska.WritingApp(ebml.UTF8("xcapture"))))
+
+	var tags []ebml.Object
+	for k, v := range vw.tags {
+		tag := matroska.Tag(
+			matroska.SimpleTag(
+				matroska.TagName(ebml.UTF8(k)),
+				matroska.TagString(ebml.UTF8(v))))
+		tags = append(tags, tag)
+	}
+	vw.enc.Emit(matroska.Tags(tags...))
 
 	vw.enc.Emit(
 		matroska.Tracks(
