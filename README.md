@@ -94,14 +94,8 @@ H.264 lossless with the x264 codec, you can use something like the
 following:
 
 ```
-xcapture [args] | ffmpeg -i pipe:0 -c:v libx264 -qp 0 -preset ultrafast -f matroska pipe:1 > output.mkv
+xcapture [args] | ffmpeg -i pipe:0 -c:v libx264 -qp 0 -preset ultrafast -f matroska output.mkv
 ```
-
-Note that we're outputting to stdout from ffmpeg instead of writing
-directly to the file. In testing, this achieved much better
-performance due to more caching and less seeking. It does, however,
-prevent ffmpeg from writing cues, so you may want to post-process the
-file after the recording has finished.
 
 Testing it on the same recording as before, this achieved a
 compression rate of 19:1 while still being able to maintain 30 FPS.
