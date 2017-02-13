@@ -131,12 +131,12 @@ func NewBuffer(pageSize, pages int) (Buffer, error) {
 	}, nil
 }
 
-type DamageEvent struct {
+type CaptureEvent struct {
 	Resized bool
 }
 
 type DamageMonitor struct {
-	C   chan DamageEvent
+	C   chan CaptureEvent
 	xu  *xgbutil.XUtil
 	fps int
 	win *Window
@@ -144,14 +144,13 @@ type DamageMonitor struct {
 
 func NewDamageMonitor(xu *xgbutil.XUtil, win *Window, fps int) *DamageMonitor {
 	dmg := &DamageMonitor{
-		C:   make(chan DamageEvent),
+		C:   make(chan CaptureEvent),
 		xu:  xu,
 		fps: fps,
 		win: win,
 	}
 	go dmg.startDamage()
 	go dmg.startCursor()
-	go dmg.start()
 	return dmg
 }
 
@@ -200,7 +199,7 @@ func (dmg *DamageMonitor) startDamage() {
 		}
 
 		if damaged || resized {
-			dmg.C <- DamageEvent{resized}
+			dmg.C <- CaptureEvent{resized}
 		}
 	}
 }
@@ -235,15 +234,11 @@ func (dmg *DamageMonitor) startCursor() {
 		}
 		if damaged {
 			select {
-			case dmg.C <- DamageEvent{}:
+			case dmg.C <- CaptureEvent{}:
 			default:
 			}
 		}
 	}
-}
-
-func (dmg *DamageMonitor) start() {
-
 }
 
 func parseSize(s string) (width, height int, err error) {
@@ -270,6 +265,8 @@ func main() {
 	fps := flag.Uint("fps", 60, "FPS")
 	winID := flag.Int("win", 0, "Window ID")
 	size := flag.String("size", "", "Canvas size in the format WxH in pixels. Defaults to the initial size of the captured window")
+	cfr := flag.Bool("cfr", false, "Use a constant frame rate")
+	_ = cfr
 	flag.Parse()
 
 	win := &Window{ID: *winID}
@@ -372,14 +369,46 @@ func main() {
 		}
 	}()
 
-	if err := damage.Init(xu.Conn()); err != nil {
-		// XXX fail back gracefully
-		log.Fatal(err)
+	var captureEvents chan (CaptureEvent)
+	if *cfr {
+		captureEvents = make(chan CaptureEvent)
+		go func() {
+			// TODO(dh): there is a lot of duplication between cfr and
+			// Damage mode for detecting resized windows.
+			for {
+				var cfgev *xproto.ConfigureNotifyEvent
+				for {
+					ev, xgberr := xu.Conn().PollForEvent()
+					if xgberr != nil {
+						continue
+					}
+					if ev == nil {
+						break
+					}
+					if ev, ok := ev.(xproto.ConfigureNotifyEvent); ok {
+						cfgev = &ev
+					}
+				}
+				resized := false
+				w, h, bw := win.Dimensions()
+				if cfgev != nil && (int(cfgev.Width) != w || int(cfgev.Height) != h || int(cfgev.BorderWidth) != bw) {
+					w, h, bw = int(cfgev.Width), int(cfgev.Height), int(cfgev.BorderWidth)
+					win.SetDimensions(w, h, bw)
+					resized = true
+				}
+				captureEvents <- CaptureEvent{Resized: resized}
+			}
+		}()
+	} else {
+		if err := damage.Init(xu.Conn()); err != nil {
+			// XXX fail back gracefully
+			log.Fatal(err)
+		}
+		damage.QueryVersion(xu.Conn(), 1, 1)
+		dmg := NewDamageMonitor(xu, win, int(*fps))
+		captureEvents = dmg.C
 	}
-	damage.QueryVersion(xu.Conn(), 1, 1)
-
-	dmg := NewDamageMonitor(xu, win, int(*fps))
-	for ev := range dmg.C {
+	for ev := range captureEvents {
 		if ev.Resized {
 			// DRY
 			xproto.FreePixmap(xu.Conn(), pix)
