@@ -168,3 +168,62 @@ contents fast enough and had to emit a duplicate frame in order to
 maintain a constant frame rate. Seeing a large number of dups in CFR
 mode is bad and is caused by a too slow CPU. A small number of dups
 can occur during window resizing or moving.
+
+## Codecs
+
+When recording video, an important choice is that of the codec and its
+settings. This document will not attempt to recommend either. Instead,
+it will list possible factors that will restrict the set of suitable
+choices.
+
+Essentially, these are the variables that will determine your options:
+
+- Resolution of the captured window
+- Frame rate of the capture
+- The kind of captured content (terminal window, fast paced game play,
+  or anything in between)
+- Lossless or lossy encoding
+- Available disk space for the recording (alternatively, the length of
+  the recording)
+- Write and seek speeds of the storage
+- Available CPU that can be used on encoding, without impacting the
+  captured content
+
+These variables can be divided into two categories: requirements and
+available resources. Higher requirements will necessitate higher
+resources, while fewer resources should cause you to readjust your
+requirements.
+
+It is possible to trade disk space and speed for CPU and vice versa,
+but only to a certain degree. It is also possible, and usually
+necessary, to trade one requirement for another. Recording high
+resolutions at low frame rates and vice versa poses relatively little
+issues, while recording at high resolution and high frame rates can
+quickly exceed your resources.
+
+For example, storing high-paced game footage at 1920x1080, 60 FPS and
+lossless will require a tremendous amount of fast disk space, or a
+tremendous amount of CPU, or a high amount of both.
+
+Storing a 300x300 terminal window that only updates at a rate of 5
+FPS, however, is virtually free and achievable with any codec on
+almost any system.
+
+While it is impossible to point at one specific combination of codec
+and options and to say "This is the best choice", we'll try our best
+to list some of the most viable choices. You are, however, encouraged
+to do your own research if you expect the highest possible quality out
+of your recordings.
+
+On the lossless front – the preferred way of storing content that has
+to be edited - viable options are HuffYUV, Ut Video, and to a degree
+H.264 (with a QP of 0 and preferably the RGB color space). Depending
+on the resolution and frame rate, storing the raw output might also be
+an option. On Windows, MagicYUV and Lagarith might also be of
+interest. FFmpeg on Linux, however, does not provide encoders for
+these.
+
+On the lossy front – handy for quick screencasts or capturing funny
+moments – H.264 with the best settings that your CPU is capable of is
+your best bet.
+
