@@ -17,15 +17,19 @@ type VideoWriter struct {
 	block     []byte
 	canvas    Canvas
 	fps       int
+	cfr       bool
+
+	idx int
 }
 
-func NewVideoWriter(c Canvas, fps int, w io.Writer) *VideoWriter {
+func NewVideoWriter(c Canvas, fps int, cfr bool, w io.Writer) *VideoWriter {
 	const hdrSize = 4
 	return &VideoWriter{
 		enc:    ebml.NewEncoder(w),
 		block:  make([]byte, c.Width*c.Height*bytesPerPixel+hdrSize),
 		canvas: c,
 		fps:    fps,
+		cfr:    cfr,
 	}
 }
 
@@ -83,25 +87,31 @@ func (vw *VideoWriter) SendFrame(frame Frame) error {
 		return nil
 	}
 	if frame.Data == nil {
-		// No new frame. If it's been 1s since the last frame,
-		// emit the previous frame again, to avoid having very
-		// long frame durations, which stalls some video players
-		// and risks data loss in case of a crash.
-		if frame.Time.Sub(vw.prevFrame.Time) < time.Second {
+		// No new frame. If we're operating in CFR mode, duplicate the
+		// last frame. If we're operating in VFR mode and it's been 1s
+		// since the last frame, emit the previous frame again, to
+		// avoid having very long frame durations, which stalls some
+		// video players and risks data loss in case of a crash.
+		if !vw.cfr && frame.Time.Sub(vw.prevFrame.Time) < time.Second {
 			return nil
 		}
 		frame.Data = vw.prevFrame.Data
 	}
 	copy(vw.block[4:], vw.prevFrame.Data)
 	ts := vw.prevFrame.Time.Sub(vw.firstTime)
-	vw.enc.Emit(
-		matroska.Cluster(
-			matroska.Timecode(ebml.Uint(ts)),
-			matroska.Position(ebml.Uint(0)),
-			matroska.BlockGroup(
-				matroska.BlockDuration(ebml.Uint(frame.Time.Sub(vw.prevFrame.Time))),
-				matroska.Block(ebml.Binary(vw.block)))))
+	var tc, bg ebml.Element
+	if vw.cfr {
+		tc = matroska.Timecode(ebml.Uint(vw.idx * int(time.Second/time.Duration(vw.fps))))
+		bg = matroska.BlockGroup(matroska.Block(ebml.Binary(vw.block)))
+	} else {
+		tc = matroska.Timecode(ebml.Uint(ts))
+		bg = matroska.BlockGroup(
+			matroska.BlockDuration(ebml.Uint(frame.Time.Sub(vw.prevFrame.Time))),
+			matroska.Block(ebml.Binary(vw.block)))
+	}
+	vw.enc.Emit(matroska.Cluster(tc, matroska.Position(ebml.Uint(0)), bg))
 
 	vw.prevFrame = frame
+	vw.idx++
 	return vw.enc.Err
 }

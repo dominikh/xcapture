@@ -376,7 +376,7 @@ func main() {
 	i := 0
 	ch := make(chan Frame)
 
-	vw := NewVideoWriter(canvas, int(*fps), os.Stdout)
+	vw := NewVideoWriter(canvas, int(*fps), *cfr, os.Stdout)
 	if err := vw.Start(); err != nil {
 		log.Fatal("Couldn't write output:", err)
 	}
