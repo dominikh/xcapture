@@ -131,75 +131,107 @@ func NewBuffer(pageSize, pages int) (Buffer, error) {
 	}, nil
 }
 
+type EventLoop struct {
+	conn *xgb.Conn
+
+	mu        sync.RWMutex
+	listeners []chan xgb.Event
+}
+
+func NewEventLoop(conn *xgb.Conn) *EventLoop {
+	el := &EventLoop{conn: conn}
+	go el.start()
+	return el
+}
+
+func (el *EventLoop) Register(ch chan xgb.Event) {
+	el.mu.Lock()
+	defer el.mu.Unlock()
+	el.listeners = append(el.listeners, ch)
+}
+
+func (el *EventLoop) start() {
+	for {
+		ev, err := el.conn.WaitForEvent()
+		if err != nil {
+			continue
+		}
+		el.mu.RLock()
+		ls := el.listeners
+		el.mu.RUnlock()
+		for _, l := range ls {
+			l <- ev
+		}
+	}
+}
+
 type CaptureEvent struct {
 	Resized bool
 }
 
-type DamageMonitor struct {
-	C   chan CaptureEvent
-	xu  *xgbutil.XUtil
-	fps int
-	win *Window
+type ResizeMonitor struct {
+	C    chan CaptureEvent
+	elCh chan xgb.Event
+	win  *Window
 }
 
-func NewDamageMonitor(xu *xgbutil.XUtil, win *Window, fps int) *DamageMonitor {
-	dmg := &DamageMonitor{
-		C:   make(chan CaptureEvent),
-		xu:  xu,
-		fps: fps,
-		win: win,
+func NewResizeMonitor(el *EventLoop, win *Window) *ResizeMonitor {
+	res := &ResizeMonitor{
+		C:    make(chan CaptureEvent),
+		elCh: make(chan xgb.Event),
+		win:  win,
 	}
+	el.Register(res.elCh)
+	go res.start()
+	return res
+}
+
+func (res *ResizeMonitor) start() {
+	for ev := range res.elCh {
+		if ev, ok := ev.(xproto.ConfigureNotifyEvent); ok {
+			w, h, bw := res.win.Dimensions()
+			if int(ev.Width) != w || int(ev.Height) != h || int(ev.BorderWidth) != bw {
+				w, h, bw = int(ev.Width), int(ev.Height), int(ev.BorderWidth)
+				res.win.SetDimensions(w, h, bw)
+				res.C <- CaptureEvent{true}
+			}
+		}
+	}
+}
+
+type DamageMonitor struct {
+	C    chan CaptureEvent
+	elCh chan xgb.Event
+	conn *xgb.Conn
+	fps  int
+	win  *Window
+}
+
+func NewDamageMonitor(conn *xgb.Conn, el *EventLoop, win *Window, fps int) *DamageMonitor {
+	dmg := &DamageMonitor{
+		C:    make(chan CaptureEvent),
+		elCh: make(chan xgb.Event),
+		conn: conn,
+		fps:  fps,
+		win:  win,
+	}
+	el.Register(dmg.elCh)
 	go dmg.startDamage()
 	go dmg.startCursor()
 	return dmg
 }
 
 func (dmg *DamageMonitor) startDamage() {
-	xdmg, err := damage.NewDamageId(dmg.xu.Conn())
+	xdmg, err := damage.NewDamageId(dmg.conn)
 	if err != nil {
 		// XXX fall back gracefully
 		log.Fatal(err)
 	}
-	damage.Create(dmg.xu.Conn(), xdmg, xproto.Drawable(dmg.win.ID), damage.ReportLevelRawRectangles)
+	damage.Create(dmg.conn, xdmg, xproto.Drawable(dmg.win.ID), damage.ReportLevelRawRectangles)
 
-	damaged := false
-	var cfgev *xproto.ConfigureNotifyEvent
-	checkEvent := func(ev xgb.Event) {
-		switch ev := ev.(type) {
-		case xproto.ConfigureNotifyEvent:
-			cfgev = &ev
-		case damage.NotifyEvent:
-			damaged = true
-		}
-	}
-	for {
-		ev, err := dmg.xu.Conn().WaitForEvent()
-		if err != nil {
-			continue
-		}
-
-		checkEvent(ev)
-		for {
-			ev, xgberr := dmg.xu.Conn().PollForEvent()
-			if xgberr != nil {
-				continue
-			}
-			if ev == nil {
-				break
-			}
-			checkEvent(ev)
-		}
-
-		resized := false
-		w, h, bw := dmg.win.Dimensions()
-		if cfgev != nil && (int(cfgev.Width) != w || int(cfgev.Height) != h || int(cfgev.BorderWidth) != bw) {
-			w, h, bw = int(cfgev.Width), int(cfgev.Height), int(cfgev.BorderWidth)
-			dmg.win.SetDimensions(w, h, bw)
-			resized = true
-		}
-
-		if damaged || resized {
-			dmg.C <- CaptureEvent{resized}
+	for ev := range dmg.elCh {
+		if _, ok := ev.(damage.NotifyEvent); ok {
+			dmg.C <- CaptureEvent{}
 		}
 	}
 }
@@ -210,7 +242,7 @@ func (dmg *DamageMonitor) startCursor() {
 	d := time.Second / time.Duration(dmg.fps)
 	t := time.NewTicker(d)
 	for range t.C {
-		cursor, err := xproto.QueryPointer(dmg.xu.Conn(), xproto.Window(dmg.win.ID)).Reply()
+		cursor, err := xproto.QueryPointer(dmg.conn, xproto.Window(dmg.win.ID)).Reply()
 		if err != nil {
 			log.Println("Couldn't query cursor position:", err)
 			continue
@@ -369,34 +401,15 @@ func main() {
 		}
 	}()
 
-	var captureEvents chan (CaptureEvent)
+	el := NewEventLoop(xu.Conn())
+	res := NewResizeMonitor(el, win)
+	var other chan CaptureEvent
+	captureEvents := make(chan CaptureEvent, 1)
 	if *cfr {
-		captureEvents = make(chan CaptureEvent)
+		other = make(chan CaptureEvent)
 		go func() {
-			// TODO(dh): there is a lot of duplication between cfr and
-			// Damage mode for detecting resized windows.
 			for {
-				var cfgev *xproto.ConfigureNotifyEvent
-				for {
-					ev, xgberr := xu.Conn().PollForEvent()
-					if xgberr != nil {
-						continue
-					}
-					if ev == nil {
-						break
-					}
-					if ev, ok := ev.(xproto.ConfigureNotifyEvent); ok {
-						cfgev = &ev
-					}
-				}
-				resized := false
-				w, h, bw := win.Dimensions()
-				if cfgev != nil && (int(cfgev.Width) != w || int(cfgev.Height) != h || int(cfgev.BorderWidth) != bw) {
-					w, h, bw = int(cfgev.Width), int(cfgev.Height), int(cfgev.BorderWidth)
-					win.SetDimensions(w, h, bw)
-					resized = true
-				}
-				captureEvents <- CaptureEvent{Resized: resized}
+				other <- CaptureEvent{}
 			}
 		}()
 	} else {
@@ -405,9 +418,22 @@ func main() {
 			log.Fatal(err)
 		}
 		damage.QueryVersion(xu.Conn(), 1, 1)
-		dmg := NewDamageMonitor(xu, win, int(*fps))
-		captureEvents = dmg.C
+		dmg := NewDamageMonitor(xu.Conn(), el, win, int(*fps))
+		other = dmg.C
 	}
+	go func() {
+		for {
+			var ev CaptureEvent
+			select {
+			case ev = <-res.C:
+			case ev = <-other:
+			}
+			select {
+			case captureEvents <- ev:
+			default:
+			}
+		}
+	}()
 	for ev := range captureEvents {
 		if ev.Resized {
 			// DRY
