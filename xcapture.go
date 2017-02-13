@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"reflect"
 	"strconv"
@@ -385,10 +386,29 @@ func main() {
 		d := time.Second / time.Duration(*fps)
 		t := time.NewTicker(d)
 		pts := time.Now()
+		min := time.Duration(math.MaxInt64)
+		var max time.Duration
 		dupped := 0
+
+		frames := uint64(0)
+		avg := time.Duration(0)
 		for ts := range t.C {
-			fps := float64(time.Second) / float64(ts.Sub(pts))
-			fmt.Fprintf(os.Stderr, "\rFrame time: %14s (%4.2f FPS); %5d dup          ", ts.Sub(pts), fps, dupped)
+			frames++
+			dt := ts.Sub(pts)
+			if dt < min {
+				min = dt
+			}
+			if dt > max {
+				max = dt
+			}
+			avg = (avg*time.Duration(frames-1) +
+				dt) / time.Duration(frames)
+
+			fps := float64(time.Second) / float64(dt)
+			fpsMin := float64(time.Second) / float64(max)
+			fpsMax := float64(time.Second) / float64(min)
+			fpsAvg := float64(time.Second) / float64(avg)
+			fmt.Fprintf(os.Stderr, "\rFrame time: %14s (%4.2f FPS, min %4.2f, max %4.2f, avg %4.2f); %5d dup          ", ts.Sub(pts), fps, fpsMin, fpsMax, fpsAvg, dupped)
 			pts = ts
 			var err error
 			select {
