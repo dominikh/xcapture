@@ -177,7 +177,7 @@ type ResizeMonitor struct {
 
 func NewResizeMonitor(el *EventLoop, win *Window) *ResizeMonitor {
 	res := &ResizeMonitor{
-		C:    make(chan CaptureEvent),
+		C:    make(chan CaptureEvent, 1),
 		elCh: make(chan xgb.Event),
 		win:  win,
 	}
@@ -193,7 +193,10 @@ func (res *ResizeMonitor) start() {
 			if int(ev.Width) != w || int(ev.Height) != h || int(ev.BorderWidth) != bw {
 				w, h, bw = int(ev.Width), int(ev.Height), int(ev.BorderWidth)
 				res.win.SetDimensions(w, h, bw)
-				res.C <- CaptureEvent{true}
+				select {
+				case res.C <- CaptureEvent{true}:
+				default:
+				}
 			}
 		}
 	}
@@ -426,11 +429,12 @@ func main() {
 			var ev CaptureEvent
 			select {
 			case ev = <-res.C:
+				captureEvents <- ev
 			case ev = <-other:
-			}
-			select {
-			case captureEvents <- ev:
-			default:
+				select {
+				case captureEvents <- ev:
+				default:
+				}
 			}
 		}
 	}()
