@@ -301,7 +301,7 @@ func parseSize(s string) (width, height int, err error) {
 }
 
 func main() {
-	fps := flag.Uint("fps", 60, "FPS")
+	fps := flag.Uint("fps", 30, "FPS")
 	winID := flag.Int("win", 0, "Window ID")
 	size := flag.String("size", "", "Canvas size in the format WxH in pixels. Defaults to the initial size of the captured window")
 	cfr := flag.Bool("cfr", false, "Use a constant frame rate")
