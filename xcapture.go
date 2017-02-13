@@ -415,7 +415,8 @@ func main() {
 			fpsMin := float64(time.Second) / float64(max)
 			fpsMax := float64(time.Second) / float64(min)
 			fpsAvg := float64(time.Second) / float64(avg)
-			fmt.Fprintf(os.Stderr, "\rFrame time: %14s (%4.2f FPS, min %4.2f, max %4.2f, avg %4.2f); %5d dup          ", ts.Sub(pts), fps, fpsMin, fpsMax, fpsAvg, dupped)
+			dt = roundDuration(dt, 10000)
+			fmt.Fprintf(os.Stderr, "\rFrame time: %10s (%4.2f FPS, min %4.2f, max %4.2f, avg %4.2f); %5d dup", dt, fps, fpsMin, fpsMax, fpsAvg, dupped)
 			pts = ts
 			var err error
 			select {
@@ -541,4 +542,28 @@ func drawCursor(xu *xgbutil.XUtil, win *Window, buf Buffer, page []byte, canvas 
 		page[off+1] = byte((alpha*uint32(byte(p>>8)) + invAlpha*uint32(page[off+1])) >> 8)
 		page[off+0] = byte((alpha*uint32(byte(p>>0)) + invAlpha*uint32(page[off+0])) >> 8)
 	}
+}
+
+func roundDuration(d, m time.Duration) time.Duration {
+	if m <= 0 {
+		return d
+	}
+	r := d % m
+	if r < 0 {
+		r = -r
+		if r+r < m {
+			return d + r
+		}
+		if d1 := d - m + r; d1 < d {
+			return d1
+		}
+		return d // overflow
+	}
+	if r+r < m {
+		return d - r
+	}
+	if d1 := d + m - r; d1 > d {
+		return d1
+	}
+	return d // overflow
 }
