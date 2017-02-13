@@ -60,7 +60,7 @@ Depending on your resolution and frame rate, this may produce a large
 amount of data. For example, 1920x1080 at 60 FPS would produce nearly
 500 MB per second (2073600 pixels at 4 byte each, 60 times a second).
 The output format is meant as an intermediate format, to be processed
-and reencoded after recording.
+and transcoded after recording.
 
 Depending on your available CPU power, storage capacity and bandwidth,
 and workflows, you can process this data in a number of ways.
@@ -78,11 +78,11 @@ Alternatively, you can compress the output with lz4 before storing it:
 xcapture [args] | lz4 > output.mkv.lz4
 ```
 
-On a modern mid-range CPU, this should be able to compress 1080p60 on
-the fly using a single CPU core. A test capture of 60 FPS game footage
+On a modern mid-range CPU, this should be able to compress 1080p30 on
+the fly using a single CPU core. A test capture of 30 FPS game footage
 achieved a compression rate of 4:1.
 
-If you have more CPU to spare, you could also reencode the stream to
+If you have more CPU to spare, you could also transcode the stream to
 H.264 on the fly, either lossy or lossless. To record the file in
 H.264 lossless with the x264 codec, you can use something like the
 following:
@@ -98,11 +98,11 @@ prevent ffmpeg from writing cues, so you may want to post-process the
 file after the recording has finished.
 
 Testing it on the same recording as before, this achieved a
-compression rate of 19:1 while still being able to maintain 60 FPS.
+compression rate of 19:1 while still being able to maintain 30 FPS.
 
 More complex setups are possible. For example, you could compress the
 video with lz4, send it over a fast network to another machine, and
-have that machine reencode the file in lossless H.264 and store it.
+have that machine transcode the file in lossless H.264 and store it.
 
 Finally, to test xcapture without storing any data, you can pipe it
 into a media player such as ffplay:
