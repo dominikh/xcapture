@@ -369,7 +369,7 @@ func main() {
 		}
 	}
 
-	buf, err := NewBuffer(int(canvas.Width)*int(canvas.Height)*bytesPerPixel, numPages)
+	buf, err := NewBuffer(canvas.Width*canvas.Height*bytesPerPixel, numPages)
 	if err != nil {
 		log.Fatal("Could not create shared memory:", err)
 	}
@@ -535,7 +535,7 @@ func drawCursor(xu *xgbutil.XUtil, win *Window, buf Buffer, page []byte, canvas 
 		}
 		off := row*canvas.Width*bytesPerPixel + col*bytesPerPixel
 		alpha := (p >> 24) + 1
-		invAlpha := uint32(256 - (p >> 24))
+		invAlpha := 256 - (p >> 24)
 
 		page[off+3] = 255
 		page[off+2] = byte((alpha*uint32(byte(p>>16)) + invAlpha*uint32(page[off+2])) >> 8)
