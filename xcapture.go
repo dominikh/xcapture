@@ -400,8 +400,9 @@ func main() {
 		frames := uint64(0)
 		avg := time.Duration(0)
 		for ts := range t.C {
-			frames++
 			dt := ts.Sub(pts)
+			pts = ts
+			frames++
 			if dt < min {
 				min = dt
 			}
@@ -417,7 +418,6 @@ func main() {
 			fpsAvg := float64(time.Second) / float64(avg)
 			dt = roundDuration(dt, 10000)
 			fmt.Fprintf(os.Stderr, "\rFrame time: %10s (%4.2f FPS, min %4.2f, max %4.2f, avg %4.2f); %5d dup", dt, fps, fpsMin, fpsMax, fpsAvg, dupped)
-			pts = ts
 			var err error
 			select {
 			case frame := <-ch:
