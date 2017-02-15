@@ -402,6 +402,7 @@ func main() {
 		start := time.Now()
 		dupped := 0
 
+		var prevFrameTime time.Time
 		first := true
 		for ts := range t.C {
 			if rhist.TotalCount()%int64(*fps) == 0 {
@@ -467,10 +468,37 @@ func main() {
 			t := time.Now()
 			select {
 			case frame := <-ch:
-				err = vw.SendFrame(frame)
+				if prevFrameTime.After(frame.Time) && !*cfr {
+					// The previous frame wasn't captured fast enough
+					// (or raced with us, due to the use of DAMAGE),
+					// so we dupped a frame instead. Now we've
+					// received the previous capture that was taking
+					// too long, with a timestamp that is before our
+					// dupped frame. Since in VFR mode each frame
+					// carries a timecode, and since VFR forces a
+					// frame to be written at least once a second,
+					// sending this frame could make time move
+					// backwards. We'll silently drop the frame, which
+					// is far from ideal, but the only viable
+					// solution. We can't set the timestamp to
+					// time.Now because a new frame might've already
+					// been captured and we'd run into the same issue
+					// on the next iteration.
+					//
+					// Note that CFR is not affected by this because
+					// it computes the timecode from the frame rate
+					// and frame counter. It might result in some
+					// unpleasant skipping, but with dupped frames in
+					// CFR mode that's already the case, anyway.
+					log.Println("dropping time travelling frame")
+				} else {
+					err = vw.SendFrame(frame)
+				}
+				prevFrameTime = frame.Time
 			default:
 				dupped++
 				err = vw.SendFrame(Frame{Time: ts})
+				prevFrameTime = ts
 			}
 			whist.RecordCorrectedValue(int64(time.Since(t)), int64(d))
 			if err != nil {
