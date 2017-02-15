@@ -116,6 +116,17 @@ func (vw *VideoWriter) SendFrame(frame Frame) error {
 		tc = matroska.Timecode(ebml.Uint(vw.idx * int(time.Second/time.Duration(vw.fps))))
 		bg = matroska.BlockGroup(matroska.Block(ebml.Binary(vw.block)))
 	} else {
+		if vw.prevFrame.Time.After(frame.Time) {
+			// Drop time travelling frames that may occur due to
+			// dupping, where we calculate a timestamp instead of
+			// receiving one from the capturer. A later frame by the
+			// capturer may in turn appear to be in the past.
+			//
+			// Such frames are very unlikely to occur because in VFR
+			// mode, dupped frames are rarely written as actual
+			// frames, only once a second if no other frame occured.
+			return nil
+		}
 		tc = matroska.Timecode(ebml.Uint(ts))
 		bg = matroska.BlockGroup(
 			matroska.BlockDuration(ebml.Uint(frame.Time.Sub(vw.prevFrame.Time))),
