@@ -396,9 +396,13 @@ func main() {
 		WriteLatencies:  hdrhistogram.New(int64(1*time.Millisecond), int64(10*time.Second), 3),
 		RenderLatencies: hdrhistogram.New(int64(1*time.Millisecond), int64(10*time.Second), 3),
 	}
+
+	var lastSlow time.Time
+	var slows uint64
 	go func() {
 		d := time.Second / time.Duration(*fps)
 		t := time.NewTicker(d)
+		start := time.Now()
 		dupped := 0
 
 		for ts := range t.C {
@@ -426,15 +430,25 @@ func main() {
 				"\033[1A\033[2K" +
 				"\033[1A\033[2K" +
 				"\033[1A\033[2K" +
+				"\033[1A\033[2K" +
 				"\r" +
-				"%d frames, %d dup\n" +
+				"%d frames, %d dup, started recording %s ago\n" +
 				"write latency min/max/avg: %.2fms/%.2fms/%.2fms±%.2fms (%g %%ile: %.2fms)\n" +
-				"render loop min/max/avg: %.2fms/%.2fms/%.2fms±%.2fms (%g %%ile: %.2fms)\n"
+				"render loop min/max/avg: %.2fms/%.2fms/%.2fms±%.2fms (%g %%ile: %.2fms)\n" +
+				"Last slowdown: %s (%d total)\n"
+
+			var dslow interface{}
+			if lastSlow.IsZero() {
+				dslow = "never"
+			} else {
+				dslow = time.Since(lastSlow).String() + " ago"
+			}
 
 			fmt.Fprintf(os.Stderr, s,
-				hists.WriteLatencies.TotalCount(), dupped,
+				hists.WriteLatencies.TotalCount(), dupped, time.Since(start),
 				milliseconds(whist.Min()), milliseconds(whist.Max()), milliseconds(int64(whist.Mean())), milliseconds(int64(whist.StdDev())), wbracket.Quantile, milliseconds(wbracket.ValueAt),
-				milliseconds(rhist.Min()), milliseconds(rhist.Max()), milliseconds(int64(rhist.Mean())), milliseconds(int64(rhist.StdDev())), rbracket.Quantile, milliseconds(rbracket.ValueAt))
+				milliseconds(rhist.Min()), milliseconds(rhist.Max()), milliseconds(int64(rhist.Mean())), milliseconds(int64(rhist.StdDev())), rbracket.Quantile, milliseconds(rbracket.ValueAt),
+				dslow, slows)
 
 			var err error
 			select {
@@ -450,7 +464,12 @@ func main() {
 				log.Fatal("Couldn't write frame:", err)
 			}
 
-			rhist.RecordCorrectedValue(int64(time.Since(ts)), int64(d))
+			dt := time.Since(ts)
+			if dt > d {
+				lastSlow = time.Now()
+				slows++
+			}
+			rhist.RecordCorrectedValue(int64(dt), int64(d))
 		}
 	}()
 
