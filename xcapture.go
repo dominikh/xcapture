@@ -470,15 +470,15 @@ func main() {
 			}
 
 			var err error
+			t := time.Now()
 			select {
 			case frame := <-ch:
-				t := time.Now()
 				err = vw.SendFrame(frame)
-				whist.RecordCorrectedValue(int64(time.Since(t)), int64(d))
 			default:
 				dupped++
 				err = vw.SendFrame(Frame{Time: ts})
 			}
+			whist.RecordCorrectedValue(int64(time.Since(t)), int64(d))
 			if err != nil {
 				log.Fatal("Couldn't write frame:", err)
 			}
