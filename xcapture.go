@@ -389,12 +389,15 @@ func main() {
 		log.Fatal("Couldn't write output:", err)
 	}
 
+	chistMu := &sync.Mutex{}
 	hists := struct {
-		WriteLatencies  *hdrhistogram.Histogram
-		RenderLatencies *hdrhistogram.Histogram
+		CaptureLatencies *hdrhistogram.Histogram
+		WriteLatencies   *hdrhistogram.Histogram
+		RenderLatencies  *hdrhistogram.Histogram
 	}{
-		WriteLatencies:  hdrhistogram.New(int64(1*time.Millisecond), int64(10*time.Second), 3),
-		RenderLatencies: hdrhistogram.New(int64(1*time.Millisecond), int64(10*time.Second), 3),
+		CaptureLatencies: hdrhistogram.New(int64(1*time.Millisecond), int64(10*time.Second), 3),
+		WriteLatencies:   hdrhistogram.New(int64(1*time.Millisecond), int64(10*time.Second), 3),
+		RenderLatencies:  hdrhistogram.New(int64(1*time.Millisecond), int64(10*time.Second), 3),
 	}
 
 	var lastSlow time.Time
@@ -406,12 +409,22 @@ func main() {
 		dupped := 0
 
 		for ts := range t.C {
+			chistMu.Lock()
+			chist := hists.WriteLatencies
 			whist := hists.WriteLatencies
 			rhist := hists.RenderLatencies
 
+			var cbracket hdrhistogram.Bracket
 			var wbracket hdrhistogram.Bracket
 			var rbracket hdrhistogram.Bracket
-			brackets := whist.CumulativeDistribution()
+			brackets := chist.CumulativeDistribution()
+			for _, bracket := range brackets {
+				if bracket.ValueAt > int64(d) {
+					break
+				}
+				cbracket = bracket
+			}
+			brackets = whist.CumulativeDistribution()
 			for _, bracket := range brackets {
 				if bracket.ValueAt > int64(d) {
 					break
@@ -431,8 +444,10 @@ func main() {
 				"\033[1A\033[2K" +
 				"\033[1A\033[2K" +
 				"\033[1A\033[2K" +
+				"\033[1A\033[2K" +
 				"\r" +
 				"%d frames, %d dup, started recording %s ago\n" +
+				"capture latency min/max/avg: %.2fms/%.2fms/%.2fms±%.2fms (%g %%ile: %.2fms)\n" +
 				"write latency min/max/avg: %.2fms/%.2fms/%.2fms±%.2fms (%g %%ile: %.2fms)\n" +
 				"render loop min/max/avg: %.2fms/%.2fms/%.2fms±%.2fms (%g %%ile: %.2fms)\n" +
 				"Last slowdown: %s (%d total)\n"
@@ -446,9 +461,11 @@ func main() {
 
 			fmt.Fprintf(os.Stderr, s,
 				hists.WriteLatencies.TotalCount(), dupped, time.Since(start),
+				milliseconds(chist.Min()), milliseconds(chist.Max()), milliseconds(int64(chist.Mean())), milliseconds(int64(chist.StdDev())), cbracket.Quantile, milliseconds(cbracket.ValueAt),
 				milliseconds(whist.Min()), milliseconds(whist.Max()), milliseconds(int64(whist.Mean())), milliseconds(int64(whist.StdDev())), wbracket.Quantile, milliseconds(wbracket.ValueAt),
 				milliseconds(rhist.Min()), milliseconds(rhist.Max()), milliseconds(int64(rhist.Mean())), milliseconds(int64(rhist.StdDev())), rbracket.Quantile, milliseconds(rbracket.ValueAt),
 				dslow, slows)
+			chistMu.Unlock()
 
 			var err error
 			select {
@@ -505,6 +522,7 @@ func main() {
 		}
 	}()
 	for ev := range captureEvents {
+		t := time.Now()
 		if ev.Resized {
 			// DRY
 			xproto.FreePixmap(xu.Conn(), pix)
@@ -542,6 +560,9 @@ func main() {
 		}
 
 		drawCursor(xu, win, buf, page, canvas)
+		chistMu.Lock()
+		hists.CaptureLatencies.RecordValue(int64(time.Since(t)))
+		chistMu.Unlock()
 
 		ch <- Frame{Data: page, Time: ts}
 		i = (i + 1) % numPages
