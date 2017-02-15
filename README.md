@@ -142,34 +142,91 @@ ffmpeg -i screen.mkv -vsync cfr -r 30 screen_cfr.mkv
 (Note that we're not specifying any codec, so ffmpeg will default to
 lossy H.264. Extend the command as necessary).
 
-## Status bar
+## Status output
 
-Xcapture prints a simple status bar in the following form:
+Xcapture prints detailed status information during recording, looking
+like this:
 
 ```
-Frame time:     9.983004ms (100.17 FPS);   664 dup
+3600 frames, 0 dup, started recording 2m0.033503072s ago
+capture latency min/max/avg: 1.57ms/6.29ms/3.22ms±0.47ms (100 %ile: 6.29ms)
+write latency min/max/avg: 0.00ms/4.19ms/1.21ms±0.32ms (100 %ile: 4.19ms)
+render loop min/max/avg: 0.00ms/4.72ms/1.29ms±0.29ms (100 %ile: 4.72ms)
+Last slowdown: never (0 total)
 ```
 
-This displays the rate at which the render loop runs, and the number
-of duplicated frames.
-
-The frame time refers to one cycle of the render loop and should
-always match the frame rate set with `-fps`, even in VFR mode. If it
-is slower than the targetted rate, either your system is too slow, or
-the output isn't being processed fast enough, for example due to a
-slow disk or a slow encoder. In order to achieve a clean recording,
-processing must always keep up with recording.
-
-The `dup` statistic tells you how many frames were duplicated, instead
-of being actually captured. In VFR mode, it's perfectly fine to see a
-large number of duplicates. That simply means that the screen didn't
-update.
+The first line prints the number of frames written so far, how many
+frames had to be duplicated (as opposed to captured from the screen)
+and how long ago the recording began. In VFR mode, it's perfectly fine
+to see a large number of duplicates. That simply means that the screen
+didn't update.
 
 In CFR mode, however, it means that we couldn't capture the window
 contents fast enough and had to emit a duplicate frame in order to
 maintain a constant frame rate. Seeing a large number of dups in CFR
 mode is bad and is caused by a too slow CPU. A small number of dups
 can occur during window resizing or moving.
+
+The next three lines display various timing related information about
+the screen capture process, the video output and the render loop,
+which fetches screen captures and sends them out for writing. Each
+line displays the following information: The minimum, maximum and
+average (the arithmetic mean) time spent per one iteration, the
+standard deviation of the average, and the percentile of loop
+iterations that weren't too slow to keep up with the targeted frame
+rate.
+
+The final line shows the last time that we were too slow and couldn't
+keep up with the frame rate.
+
+Let's consider the following example, in which we were capturing 60
+FPS CFR and sending it into ffmpeg:
+
+```
+2220 frames, 8 dup, started recording 37.016802689s ago
+capture latency min/max/avg: 1.57ms/29.36ms/3.36ms±1.46ms (99.21875 %ile: 9.44ms)
+write latency min/max/avg: 0.00ms/24.12ms/4.58ms±0.64ms (99.951171875 %ile: 13.11ms)
+render loop min/max/avg: 0.00ms/24.12ms/4.61ms±0.72ms (99.90234375 %ile: 15.20ms)
+Last slowdown: 36.929765031s ago (2 total)
+```
+
+It shows that we've recorded 2220 frames in 37 seconds, of which 8
+were duplicated. 99.21875% of frames could be captured in time,
+needing at most 9.44ms. 0.78125% of frames couldn't be captured in
+time, and at worst we needed 29.36ms to capture a frame. This
+corresponds with the number of duplicated frames.
+
+Similarly, ~99.95% of all frames could be written in time. The
+remaining ~0.04% were too slow, most likely because ffmpeg couldn't
+keep up. And even in the 99.95% of cases, we came dangerously close to
+16.6ms (the duration of one frame at 60 FPS); the average, however,
+was 4.58ms with very little variance. Together with the final line,
+which indicates that the last time we fell behind was right at the
+beginning of the recording, we can deduce that ffmpeg was slow to
+start but otherwise fast enough at processing our frames.
+
+THe render loop shows similar statistics to the write loop, which
+makes sense, as its runtime is largely dictated by how long it took to
+write a frame.
+
+Overall, the output shows us that, aside from a hiccup at the
+beginning, we can record at our targeted frame rate without issues.
+
+In contrast, the following example shows much worse performance, to
+the point that the recorded video will be largely useless:
+
+```
+2875 frames, 18 dup, started recording 31.989022993s ago
+capture latency min/max/avg: 2.62ms/24.12ms/4.41ms±1.09ms (99.21875 %ile: 8.91ms)
+write latency min/max/avg: 0.00ms/18.87ms/8.10ms±0.92ms (96.875 %ile: 10.49ms)
+render loop min/max/avg: 0.00ms/25.69ms/8.25ms±1.56ms (96.875 %ile: 11.01ms)
+Last slowdown: 3.421969078s ago (81 total)
+```
+
+Over 3% of our frames couldn't be written fast enough, and we've
+already had 81 slowdowns in 32 seconds, the last slowdown having
+occured 3.4 seconds ago, so not near the start of the recording. We
+don't seem able to record at the targeted frame rate.
 
 ## Codecs
 
