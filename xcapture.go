@@ -497,8 +497,8 @@ func main() {
 				prevFrameTime = frame.Time
 			default:
 				dupped++
-				err = vw.SendFrame(Frame{Time: ts})
-				prevFrameTime = ts
+				err = vw.SendFrame(Frame{Time: prevFrameTime.Add(d)})
+				prevFrameTime = prevFrameTime.Add(d)
 			}
 			whist.RecordCorrectedValue(int64(time.Since(t)), int64(d))
 			if err != nil {
