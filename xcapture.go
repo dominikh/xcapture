@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"math"
 	"os"
 	"reflect"
 	"strconv"
@@ -22,6 +21,7 @@ import (
 	"github.com/BurntSushi/xgb/xfixes"
 	"github.com/BurntSushi/xgb/xproto"
 	"github.com/BurntSushi/xgbutil"
+	"github.com/codahale/hdrhistogram"
 )
 
 const bytesPerPixel = 4
@@ -389,39 +389,59 @@ func main() {
 		log.Fatal("Couldn't write output:", err)
 	}
 
+	hists := struct {
+		WriteLatencies  *hdrhistogram.Histogram
+		RenderLatencies *hdrhistogram.Histogram
+	}{
+		WriteLatencies:  hdrhistogram.New(int64(1*time.Millisecond), int64(10*time.Second), 3),
+		RenderLatencies: hdrhistogram.New(int64(1*time.Millisecond), int64(10*time.Second), 3),
+	}
 	go func() {
 		d := time.Second / time.Duration(*fps)
 		t := time.NewTicker(d)
-		pts := time.Now()
-		min := time.Duration(math.MaxInt64)
-		var max time.Duration
 		dupped := 0
 
-		frames := uint64(0)
-		avg := time.Duration(0)
 		for ts := range t.C {
-			dt := ts.Sub(pts)
-			pts = ts
-			frames++
-			if dt < min {
-				min = dt
-			}
-			if dt > max {
-				max = dt
-			}
-			avg = (avg*time.Duration(frames-1) +
-				dt) / time.Duration(frames)
+			whist := hists.WriteLatencies
+			rhist := hists.RenderLatencies
 
-			fps := float64(time.Second) / float64(dt)
-			fpsMin := float64(time.Second) / float64(max)
-			fpsMax := float64(time.Second) / float64(min)
-			fpsAvg := float64(time.Second) / float64(avg)
-			dt = roundDuration(dt, 10000)
-			fmt.Fprintf(os.Stderr, "\rFrame time: %10s (%4.2f FPS, min %4.2f, max %4.2f, avg %4.2f); %5d dup", dt, fps, fpsMin, fpsMax, fpsAvg, dupped)
+			var wbracket hdrhistogram.Bracket
+			var rbracket hdrhistogram.Bracket
+			brackets := whist.CumulativeDistribution()
+			for _, bracket := range brackets {
+				if bracket.ValueAt > int64(d) {
+					break
+				}
+				wbracket = bracket
+			}
+			brackets = rhist.CumulativeDistribution()
+			for _, bracket := range brackets {
+				if bracket.ValueAt > int64(d) {
+					break
+				}
+				rbracket = bracket
+			}
+
+			s := "\033[2K" +
+				"\033[1A\033[2K" +
+				"\033[1A\033[2K" +
+				"\033[1A\033[2K" +
+				"\r" +
+				"%d frames, %d dup\n" +
+				"write latency min/max/avg: %.2fms/%.2fms/%.2fms±%.2fms (%g %%ile: %.2fms)\n" +
+				"render loop min/max/avg: %.2fms/%.2fms/%.2fms±%.2fms (%g %%ile: %.2fms)\n"
+
+			fmt.Fprintf(os.Stderr, s,
+				hists.WriteLatencies.TotalCount(), dupped,
+				milliseconds(whist.Min()), milliseconds(whist.Max()), milliseconds(int64(whist.Mean())), milliseconds(int64(whist.StdDev())), wbracket.Quantile, milliseconds(wbracket.ValueAt),
+				milliseconds(rhist.Min()), milliseconds(rhist.Max()), milliseconds(int64(rhist.Mean())), milliseconds(int64(rhist.StdDev())), rbracket.Quantile, milliseconds(rbracket.ValueAt))
+
 			var err error
 			select {
 			case frame := <-ch:
+				t := time.Now()
 				err = vw.SendFrame(frame)
+				whist.RecordCorrectedValue(int64(time.Since(t)), int64(d))
 			default:
 				dupped++
 				err = vw.SendFrame(Frame{Time: ts})
@@ -429,6 +449,8 @@ func main() {
 			if err != nil {
 				log.Fatal("Couldn't write frame:", err)
 			}
+
+			rhist.RecordCorrectedValue(int64(time.Since(ts)), int64(d))
 		}
 	}()
 
@@ -566,4 +588,11 @@ func roundDuration(d, m time.Duration) time.Duration {
 		return d1
 	}
 	return d // overflow
+}
+
+func milliseconds(di int64) float64 {
+	d := time.Duration(di)
+	sec := d / time.Millisecond
+	nsec := d % time.Millisecond
+	return float64(sec) + float64(nsec)*1e-6
 }
