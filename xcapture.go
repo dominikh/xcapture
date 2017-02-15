@@ -402,6 +402,7 @@ func main() {
 		start := time.Now()
 		dupped := 0
 
+		first := true
 		for ts := range t.C {
 			if rhist.TotalCount()%int64(*fps) == 0 {
 				chistMu.Lock()
@@ -430,18 +431,21 @@ func main() {
 					rbracket = bracket
 				}
 
-				s := "\033[2K" +
-					"\033[1A\033[2K" +
-					"\033[1A\033[2K" +
-					"\033[1A\033[2K" +
-					"\033[1A\033[2K" +
-					"\033[1A\033[2K" +
-					"\r" +
-					"%d frames, %d dup, started recording %s ago\n" +
+				s := "%d frames, %d dup, started recording %s ago\n" +
 					"capture latency min/max/avg: %.2fms/%.2fms/%.2fms±%.2fms (%g %%ile: %.2fms)\n" +
 					"write latency min/max/avg: %.2fms/%.2fms/%.2fms±%.2fms (%g %%ile: %.2fms)\n" +
 					"render loop min/max/avg: %.2fms/%.2fms/%.2fms±%.2fms (%g %%ile: %.2fms)\n" +
 					"Last slowdown: %s (%d total)\n"
+				if !first {
+					s = "\033[2K" +
+						"\033[1A\033[2K" +
+						"\033[1A\033[2K" +
+						"\033[1A\033[2K" +
+						"\033[1A\033[2K" +
+						"\033[1A\033[2K" +
+						"\r" + s
+				}
+				first = false
 
 				var dslow interface{}
 				if lastSlow.IsZero() {
