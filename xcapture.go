@@ -409,63 +409,65 @@ func main() {
 		dupped := 0
 
 		for ts := range t.C {
-			chistMu.Lock()
 			chist := hists.WriteLatencies
 			whist := hists.WriteLatencies
 			rhist := hists.RenderLatencies
 
-			var cbracket hdrhistogram.Bracket
-			var wbracket hdrhistogram.Bracket
-			var rbracket hdrhistogram.Bracket
-			brackets := chist.CumulativeDistribution()
-			for _, bracket := range brackets {
-				if bracket.ValueAt > int64(d) {
-					break
+			if rhist.TotalCount()%int64(*fps) == 0 {
+				chistMu.Lock()
+				var cbracket hdrhistogram.Bracket
+				var wbracket hdrhistogram.Bracket
+				var rbracket hdrhistogram.Bracket
+				brackets := chist.CumulativeDistribution()
+				for _, bracket := range brackets {
+					if bracket.ValueAt > int64(d) {
+						break
+					}
+					cbracket = bracket
 				}
-				cbracket = bracket
-			}
-			brackets = whist.CumulativeDistribution()
-			for _, bracket := range brackets {
-				if bracket.ValueAt > int64(d) {
-					break
+				brackets = whist.CumulativeDistribution()
+				for _, bracket := range brackets {
+					if bracket.ValueAt > int64(d) {
+						break
+					}
+					wbracket = bracket
 				}
-				wbracket = bracket
-			}
-			brackets = rhist.CumulativeDistribution()
-			for _, bracket := range brackets {
-				if bracket.ValueAt > int64(d) {
-					break
+				brackets = rhist.CumulativeDistribution()
+				for _, bracket := range brackets {
+					if bracket.ValueAt > int64(d) {
+						break
+					}
+					rbracket = bracket
 				}
-				rbracket = bracket
+
+				s := "\033[2K" +
+					"\033[1A\033[2K" +
+					"\033[1A\033[2K" +
+					"\033[1A\033[2K" +
+					"\033[1A\033[2K" +
+					"\033[1A\033[2K" +
+					"\r" +
+					"%d frames, %d dup, started recording %s ago\n" +
+					"capture latency min/max/avg: %.2fms/%.2fms/%.2fms±%.2fms (%g %%ile: %.2fms)\n" +
+					"write latency min/max/avg: %.2fms/%.2fms/%.2fms±%.2fms (%g %%ile: %.2fms)\n" +
+					"render loop min/max/avg: %.2fms/%.2fms/%.2fms±%.2fms (%g %%ile: %.2fms)\n" +
+					"Last slowdown: %s (%d total)\n"
+
+				var dslow interface{}
+				if lastSlow.IsZero() {
+					dslow = "never"
+				} else {
+					dslow = time.Since(lastSlow).String() + " ago"
+				}
+
+				fmt.Fprintf(os.Stderr, s,
+					hists.WriteLatencies.TotalCount(), dupped, time.Since(start),
+					milliseconds(chist.Min()), milliseconds(chist.Max()), milliseconds(int64(chist.Mean())), milliseconds(int64(chist.StdDev())), cbracket.Quantile, milliseconds(cbracket.ValueAt),
+					milliseconds(whist.Min()), milliseconds(whist.Max()), milliseconds(int64(whist.Mean())), milliseconds(int64(whist.StdDev())), wbracket.Quantile, milliseconds(wbracket.ValueAt),
+					milliseconds(rhist.Min()), milliseconds(rhist.Max()), milliseconds(int64(rhist.Mean())), milliseconds(int64(rhist.StdDev())), rbracket.Quantile, milliseconds(rbracket.ValueAt),
+					dslow, slows)
+				chistMu.Unlock()
 			}
-
-			s := "\033[2K" +
-				"\033[1A\033[2K" +
-				"\033[1A\033[2K" +
-				"\033[1A\033[2K" +
-				"\033[1A\033[2K" +
-				"\033[1A\033[2K" +
-				"\r" +
-				"%d frames, %d dup, started recording %s ago\n" +
-				"capture latency min/max/avg: %.2fms/%.2fms/%.2fms±%.2fms (%g %%ile: %.2fms)\n" +
-				"write latency min/max/avg: %.2fms/%.2fms/%.2fms±%.2fms (%g %%ile: %.2fms)\n" +
-				"render loop min/max/avg: %.2fms/%.2fms/%.2fms±%.2fms (%g %%ile: %.2fms)\n" +
-				"Last slowdown: %s (%d total)\n"
-
-			var dslow interface{}
-			if lastSlow.IsZero() {
-				dslow = "never"
-			} else {
-				dslow = time.Since(lastSlow).String() + " ago"
-			}
-
-			fmt.Fprintf(os.Stderr, s,
-				hists.WriteLatencies.TotalCount(), dupped, time.Since(start),
-				milliseconds(chist.Min()), milliseconds(chist.Max()), milliseconds(int64(chist.Mean())), milliseconds(int64(chist.StdDev())), cbracket.Quantile, milliseconds(cbracket.ValueAt),
-				milliseconds(whist.Min()), milliseconds(whist.Max()), milliseconds(int64(whist.Mean())), milliseconds(int64(whist.StdDev())), wbracket.Quantile, milliseconds(wbracket.ValueAt),
-				milliseconds(rhist.Min()), milliseconds(rhist.Max()), milliseconds(int64(rhist.Mean())), milliseconds(int64(rhist.StdDev())), rbracket.Quantile, milliseconds(rbracket.ValueAt),
-				dslow, slows)
-			chistMu.Unlock()
 
 			var err error
 			select {
